@@ -27,10 +27,47 @@ class FakeRunner:
 
 
 class DentalSegmentatorRunner:
-    """Real nnU-Net v2 runner. Body implemented in Task 14."""
+    """Real nnU-Net v2 runner for the DentalSegmentator model.
+
+    model_dir must be an nnU-Net results folder containing the trained model
+    (a `Dataset112_*` folder with `dataset.json` and `plans.json`). Inference
+    runs on CPU when no GPU is available.
+    """
 
     def __init__(self, model_dir: str) -> None:
         self._model_dir = model_dir
 
     def predict(self, volume: Volume) -> np.ndarray:
-        raise NotImplementedError("DentalSegmentatorRunner.predict added in Task 14")
+        import tempfile
+        from pathlib import Path
+
+        import SimpleITK as sitk
+        import torch
+        from nnunetv2.inference.predict_from_raw_data import nnUNetPredictor
+
+        from stomcore.sitk_interop import sitk_from_volume
+
+        with tempfile.TemporaryDirectory() as tmp:
+            in_dir = Path(tmp) / "in"
+            out_dir = Path(tmp) / "out"
+            in_dir.mkdir()
+            out_dir.mkdir()
+            # nnU-Net expects <case>_<channel:04d>.nii.gz
+            sitk.WriteImage(sitk_from_volume(volume), str(in_dir / "case_0000.nii.gz"),
+                            useCompression=True)
+
+            predictor = nnUNetPredictor(
+                device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
+                allow_tqdm=False,
+            )
+            predictor.initialize_from_trained_model_folder(
+                self._model_dir,
+                use_folds=("all",),
+                checkpoint_name="checkpoint_final.pth",
+            )
+            predictor.predict_from_files(
+                str(in_dir), str(out_dir),
+                save_probabilities=False, overwrite=True,
+            )
+            result = sitk.ReadImage(str(out_dir / "case.nii.gz"))
+            return sitk.GetArrayFromImage(result).astype(np.uint16)

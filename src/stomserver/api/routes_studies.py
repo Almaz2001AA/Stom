@@ -6,12 +6,12 @@ import json
 import tempfile
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile
 from sqlalchemy.orm import Session
 
 from ..auth import get_current_account
 from ..db.models import Account, Job, Study
-from ..storage.base import Storage
+from ..storage.base import Storage, StorageKeyError
 from .deps import get_db, get_queue, get_storage
 from .schemas import JobStatus, StudyCreated
 
@@ -89,3 +89,53 @@ def segment_study(
         raise HTTPException(status_code=503, detail=f"queue unavailable: {exc}") from exc
 
     return JobStatus(job_id=job.id, status=job.status, error=job.error)
+
+
+def _latest_done_job(db: Session, study: Study) -> Job | None:
+    return (
+        db.query(Job)
+        .filter_by(study_id=study.id, status="done")
+        .order_by(Job.id.desc())
+        .first()
+    )
+
+
+@router.get("/studies/{study_id}/masks")
+def get_mask(
+    study_id: int,
+    account: Account = Depends(get_current_account),
+    db: Session = Depends(get_db),
+    storage: Storage = Depends(get_storage),
+) -> Response:
+    study = db.query(Study).filter_by(id=study_id, account_id=account.id).first()
+    if study is None:
+        raise HTTPException(status_code=404, detail="study not found")
+    job = _latest_done_job(db, study)
+    if job is None or not job.mask_storage_key:
+        raise HTTPException(status_code=409, detail="mask not ready")
+    try:
+        data = storage.get(job.mask_storage_key)
+    except StorageKeyError:
+        raise HTTPException(status_code=404, detail="mask file missing")
+    return Response(content=data, media_type="application/gzip")
+
+
+@router.get("/studies/{study_id}/masks/labels")
+def get_mask_labels(
+    study_id: int,
+    account: Account = Depends(get_current_account),
+    db: Session = Depends(get_db),
+    storage: Storage = Depends(get_storage),
+) -> Response:
+    study = db.query(Study).filter_by(id=study_id, account_id=account.id).first()
+    if study is None:
+        raise HTTPException(status_code=404, detail="study not found")
+    job = _latest_done_job(db, study)
+    if job is None:
+        raise HTTPException(status_code=409, detail="mask not ready")
+    labels_key = job.mask_storage_key.rsplit("/", 1)[0] + "/mask_labels.json"
+    try:
+        data = storage.get(labels_key)
+    except StorageKeyError:
+        raise HTTPException(status_code=404, detail="labels file missing")
+    return Response(content=data, media_type="application/json")

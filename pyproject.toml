@@ -14,6 +14,17 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
+server = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "sqlalchemy>=2.0",
+    "rq>=1.16",
+    "redis>=5.0",
+    "fakeredis>=2.21",
+    "httpx>=0.27",
+    "python-multipart>=0.0.9",
+]
+nnunet = ["nnunetv2>=2.5"]
 
 [project.scripts]
 stom-dicom2nifti = "stomcore.cli:main"
@@ -23,3 +34,4 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["slow: tests that need the real model/weights (skipped by default unless run explicitly)"]

@@ -25,3 +25,23 @@ def test_upload_rejects_bad_nifti(client, account_token):
                     headers=_auth(token))
     assert r.status_code == 400
     assert r.json()["code"] == 400
+
+
+from stomserver.config import Config
+
+
+def test_upload_rejects_too_large(client, account_token, nifti_bytes):
+    _, token = account_token
+    # Shrink the limit on the running app to below the payload size.
+    base = client.app.state.config
+    client.app.state.config = Config(
+        db_url=base.db_url, storage_dir=base.storage_dir, redis_url=base.redis_url,
+        model_dir=base.model_dir, max_upload_bytes=10,
+    )
+    try:
+        r = client.post("/studies", files={"file": ("v.nii.gz", nifti_bytes)},
+                        headers={"Authorization": f"Bearer {token}"})
+        assert r.status_code == 413
+        assert r.json()["code"] == 413
+    finally:
+        client.app.state.config = base

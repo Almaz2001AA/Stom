@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from ..auth import get_current_account
 from ..db.models import Account, Job, Study
 from ..storage.base import Storage, StorageKeyError
-from .deps import get_db, get_queue, get_storage
+from .deps import get_config, get_db, get_queue, get_storage
 from .schemas import JobStatus, StudyCreated
 
 router = APIRouter()
@@ -28,8 +28,11 @@ def create_study(
     account: Account = Depends(get_current_account),
     db: Session = Depends(get_db),
     storage: Storage = Depends(get_storage),
+    config=Depends(get_config),
 ) -> StudyCreated:
-    raw = file.file.read()
+    raw = file.file.read(config.max_upload_bytes + 1)
+    if len(raw) > config.max_upload_bytes:
+        raise HTTPException(status_code=413, detail="upload too large")
 
     # Validate by parsing through stomcore; write to a temp file first.
     with tempfile.TemporaryDirectory() as tmp:
@@ -131,7 +134,7 @@ def get_mask_labels(
     if study is None:
         raise HTTPException(status_code=404, detail="study not found")
     job = _latest_done_job(db, study)
-    if job is None:
+    if job is None or not job.mask_storage_key:
         raise HTTPException(status_code=409, detail="mask not ready")
     labels_key = job.mask_storage_key.rsplit("/", 1)[0] + "/mask_labels.json"
     try:

@@ -24,3 +24,7 @@ def get_storage(request: Request) -> Storage:
 
 def get_queue(request: Request):
     return request.app.state.queue
+
+
+def get_config(request: Request):
+    return request.app.state.config

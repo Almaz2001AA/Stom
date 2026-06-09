@@ -1,7 +1,68 @@
-"""Study routes (filled in Tasks 8-9, masks in Task 10)."""
+"""Study routes: upload (this task), masks (Task 10)."""
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+import json
+import tempfile
+from pathlib import Path
+
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from sqlalchemy.orm import Session
+
+from ..auth import get_current_account
+from ..db.models import Account, Study
+from ..storage.base import Storage
+from .deps import get_db, get_storage
+from .schemas import StudyCreated
 
 router = APIRouter()
+
+
+def _study_key(account_id: int, study_id: int, name: str) -> str:
+    return f"{account_id}/studies/{study_id}/{name}"
+
+
+@router.post("/studies", response_model=StudyCreated, status_code=201)
+def create_study(
+    file: UploadFile = File(...),
+    account: Account = Depends(get_current_account),
+    db: Session = Depends(get_db),
+    storage: Storage = Depends(get_storage),
+) -> StudyCreated:
+    raw = file.file.read()
+
+    # Validate by parsing through stomcore; write to a temp file first.
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp) / "upload.nii.gz"
+        tmp_path.write_bytes(raw)
+        try:
+            from stomcore.nifti_io import load_volume_nifti
+
+            volume = load_volume_nifti(tmp_path)
+        except Exception as exc:  # noqa: BLE001 - any read failure is a bad upload
+            raise HTTPException(status_code=400, detail=f"invalid NIfTI: {exc}") from exc
+
+    shape = [int(s) for s in volume.shape]
+    # NIfTI stores spacing as float32; round to undo float32 round-trip noise.
+    spacing = [round(float(s), 6) for s in volume.geometry.spacing]
+
+    study = Study(
+        account_id=account.id,
+        original_filename=file.filename or "upload.nii.gz",
+        storage_key="",  # set after we know the id
+        shape=json.dumps(shape),
+        spacing=json.dumps(spacing),
+    )
+    db.add(study)
+    db.flush()  # assigns study.id
+
+    key = _study_key(account.id, study.id, "volume.nii.gz")
+    study.storage_key = key
+    storage.put(key, raw)
+    db.commit()
+
+    return StudyCreated(
+        study_id=study.id,
+        shape=shape,
+        spacing=spacing,
+    )

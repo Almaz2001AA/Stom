@@ -1,0 +1,11 @@
+This product uses the DentalSegmentator model and the nnU-Net framework.
+
+DentalSegmentator (pretrained nnU-Net v2 weights, CC-BY 4.0):
+  G. Dot et al., "DentalSegmentator: robust deep learning-based CBCT image
+  segmentation." Weights: https://zenodo.org/records/10829675
+
+nnU-Net:
+  Isensee, F., et al. "nnU-Net: a self-configuring method for deep
+  learning-based biomedical image segmentation." Nature Methods (2021).
+
+Used under the Creative Commons Attribution 4.0 International license.

@@ -22,3 +22,10 @@ def install_error_handlers(app: FastAPI) -> None:
             status_code=422,
             content={"detail": "validation error", "code": 422},
         )
+
+    @app.exception_handler(Exception)
+    async def _unhandled(request: Request, exc: Exception):
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "internal server error", "code": 500},
+        )

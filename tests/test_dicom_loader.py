@@ -27,3 +27,8 @@ def test_raises_when_directory_missing(tmp_path):
     missing = tmp_path / "does-not-exist"
     with pytest.raises(DicomError, match="not a directory"):
         DicomLoader.load(str(missing))
+
+
+def test_raises_on_multiple_series(multi_series):
+    with pytest.raises(DicomError, match="multiple DICOM series"):
+        DicomLoader.load(multi_series)

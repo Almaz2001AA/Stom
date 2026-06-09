@@ -5,13 +5,20 @@ import pytest
 import SimpleITK as sitk
 
 
-def _write_dicom_series(directory, n_slices, rows=16, cols=16, spacing=(0.3, 0.3, 0.3)):
+def _write_dicom_series(
+    directory,
+    n_slices,
+    rows=16,
+    cols=16,
+    spacing=(0.3, 0.3, 0.3),
+    series_uid: str = "1.2.826.0.1.3680043.2.1125.1.1234567890",
+    name_prefix: str = "slice",
+):
     """Write a minimal valid CT DICOM series into `directory`. Returns the dir path."""
     arr = (np.arange(n_slices * rows * cols).reshape(n_slices, rows, cols) % 1000).astype(np.int16)
     img = sitk.GetImageFromArray(arr)
     img.SetSpacing(spacing)
 
-    series_uid = "1.2.826.0.1.3680043.2.1125.1.1234567890"
     writer = sitk.ImageFileWriter()
     writer.KeepOriginalImageUIDOn()
     tags = {
@@ -31,7 +38,7 @@ def _write_dicom_series(directory, n_slices, rows=16, cols=16, spacing=(0.3, 0.3
         slice_i.SetMetaData("0020|0032", "\\".join(f"{c:.4f}" for c in position))  # Image Position
         slice_i.SetMetaData("0020|0013", str(i))  # Instance Number
         slice_i.SetMetaData("0008|0018", f"{series_uid}.{i}")  # SOP Instance UID
-        writer.SetFileName(os.path.join(directory, f"slice_{i:03d}.dcm"))
+        writer.SetFileName(os.path.join(directory, f"{name_prefix}_{i:03d}.dcm"))
         writer.Execute(slice_i)
     return directory
 
@@ -50,3 +57,19 @@ def single_slice_series(tmp_path):
     d = tmp_path / "single"
     d.mkdir()
     return _write_dicom_series(str(d), n_slices=1)
+
+
+@pytest.fixture
+def multi_series(tmp_path):
+    """A directory containing two distinct DICOM series."""
+    d = tmp_path / "multi"
+    d.mkdir()
+    _write_dicom_series(
+        str(d), n_slices=4,
+        series_uid="1.2.826.0.1.3680043.2.1125.1.1111111111", name_prefix="a",
+    )
+    _write_dicom_series(
+        str(d), n_slices=4,
+        series_uid="1.2.826.0.1.3680043.2.1125.1.2222222222", name_prefix="b",
+    )
+    return str(d)

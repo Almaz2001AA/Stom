@@ -10,10 +10,10 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
 from ..auth import get_current_account
-from ..db.models import Account, Study
+from ..db.models import Account, Job, Study
 from ..storage.base import Storage
-from .deps import get_db, get_storage
-from .schemas import StudyCreated
+from .deps import get_db, get_queue, get_storage
+from .schemas import JobStatus, StudyCreated
 
 router = APIRouter()
 
@@ -66,3 +66,26 @@ def create_study(
         shape=shape,
         spacing=spacing,
     )
+
+
+@router.post("/studies/{study_id}/segment", response_model=JobStatus, status_code=202)
+def segment_study(
+    study_id: int,
+    account: Account = Depends(get_current_account),
+    db: Session = Depends(get_db),
+    queue=Depends(get_queue),
+) -> JobStatus:
+    study = db.query(Study).filter_by(id=study_id, account_id=account.id).first()
+    if study is None:
+        raise HTTPException(status_code=404, detail="study not found")
+
+    job = Job(study_id=study.id, account_id=account.id, model_name="dentalsegmentator")
+    db.add(job)
+    db.commit()
+
+    try:
+        queue.enqueue_segmentation(job.id)
+    except Exception as exc:  # noqa: BLE001 - queue/Redis down
+        raise HTTPException(status_code=503, detail=f"queue unavailable: {exc}") from exc
+
+    return JobStatus(job_id=job.id, status=job.status, error=job.error)

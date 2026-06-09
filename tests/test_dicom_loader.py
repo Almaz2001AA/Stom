@@ -32,3 +32,18 @@ def test_raises_when_directory_missing(tmp_path):
 def test_raises_on_multiple_series(multi_series):
     with pytest.raises(DicomError, match="multiple DICOM series"):
         DicomLoader.load(multi_series)
+
+
+def test_wraps_sitk_runtime_error_as_dicom_error(tmp_path, monkeypatch):
+    import SimpleITK as sitk
+
+    # A real directory so the "not a directory" guard passes.
+    d = tmp_path / "broken"
+    d.mkdir()
+
+    def boom(self, directory):
+        raise RuntimeError("GDCM exploded")
+
+    monkeypatch.setattr(sitk.ImageSeriesReader, "GetGDCMSeriesIDs", boom)
+    with pytest.raises(DicomError, match="failed to scan"):
+        DicomLoader.load(str(d))

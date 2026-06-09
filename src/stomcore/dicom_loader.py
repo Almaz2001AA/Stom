@@ -24,7 +24,10 @@ class DicomLoader:
             raise DicomError(f"not a directory: {directory}")
 
         reader = sitk.ImageSeriesReader()
-        series_ids = reader.GetGDCMSeriesIDs(directory)
+        try:
+            series_ids = reader.GetGDCMSeriesIDs(directory)
+        except RuntimeError as exc:
+            raise DicomError(f"failed to scan DICOM directory {directory}: {exc}") from exc
         if not series_ids:
             raise DicomError(f"no DICOM series found in {directory}")
         if len(series_ids) > 1:
@@ -39,5 +42,8 @@ class DicomLoader:
             )
 
         reader.SetFileNames(file_names)
-        image = reader.Execute()
+        try:
+            image = reader.Execute()
+        except RuntimeError as exc:
+            raise DicomError(f"failed to read DICOM series: {exc}") from exc
         return volume_from_sitk(image)

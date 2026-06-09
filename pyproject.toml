@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stomcore"
+version = "0.1.0"
+description = "Core data layer for CBCT segmentation (DICOM/NIfTI, Volume, masks)"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.26",
+    "SimpleITK>=2.3",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+stom-dicom2nifti = "stomcore.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

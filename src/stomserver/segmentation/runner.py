@@ -6,24 +6,31 @@ from typing import Protocol
 
 import numpy as np
 
+from stomcore.geometry import Geometry
 from stomcore.volume import Volume
 
 
 class SegmentationRunner(Protocol):
-    def predict(self, volume: Volume) -> np.ndarray:
-        """Return a label volume [z, y, x] matching the input volume shape."""
+    def predict(self, volume: Volume) -> tuple[np.ndarray, Geometry]:
+        """Return ``(labels, geometry)`` for the prediction.
+
+        ``labels`` is a [z, y, x] label volume; ``geometry`` is the spatial
+        geometry of that prediction. The caller verifies it is compatible with
+        the input volume, so a runner that silently alters shape/spacing/origin
+        is detected rather than trusted.
+        """
         ...
 
 
 class FakeRunner:
     """Deterministic stand-in: labels a few fixed voxels. No model needed."""
 
-    def predict(self, volume: Volume) -> np.ndarray:
+    def predict(self, volume: Volume) -> tuple[np.ndarray, Geometry]:
         labels = np.zeros(volume.shape, dtype=np.uint16)
         flat = labels.reshape(-1)
         for i in range(min(5, flat.size)):
             flat[i] = i + 1
-        return labels
+        return labels, volume.geometry
 
 
 class DentalSegmentatorRunner:
@@ -37,7 +44,7 @@ class DentalSegmentatorRunner:
     def __init__(self, model_dir: str) -> None:
         self._model_dir = model_dir
 
-    def predict(self, volume: Volume) -> np.ndarray:
+    def predict(self, volume: Volume) -> tuple[np.ndarray, Geometry]:
         import tempfile
         from pathlib import Path
 
@@ -45,7 +52,7 @@ class DentalSegmentatorRunner:
         import torch
         from nnunetv2.inference.predict_from_raw_data import nnUNetPredictor
 
-        from stomcore.sitk_interop import sitk_from_volume
+        from stomcore.sitk_interop import geometry_from_sitk, sitk_from_volume
 
         with tempfile.TemporaryDirectory() as tmp:
             in_dir = Path(tmp) / "in"
@@ -70,4 +77,5 @@ class DentalSegmentatorRunner:
                 save_probabilities=False, overwrite=True,
             )
             result = sitk.ReadImage(str(out_dir / "case.nii.gz"))
-            return sitk.GetArrayFromImage(result).astype(np.uint16)
+            labels = sitk.GetArrayFromImage(result).astype(np.uint16)
+            return labels, geometry_from_sitk(result)

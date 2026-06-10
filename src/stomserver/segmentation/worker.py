@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 import tempfile
 from pathlib import Path
 
@@ -36,10 +37,12 @@ def _run_segmentation(job_id: int, session_factory, storage: Storage,
             vpath.write_bytes(storage.get(study.storage_key))
             volume = load_volume_nifti(vpath)
 
-            labels = runner.predict(volume)
-            mask = SegmentationMask(labels, volume.geometry, DENTALSEGMENTATOR_LABELS)
+            labels, geometry = runner.predict(volume)
+            mask = SegmentationMask(labels, geometry, DENTALSEGMENTATOR_LABELS)
             if not mask.is_compatible_with(volume):
-                raise ValueError("predicted mask geometry does not match volume")
+                raise ValueError(
+                    "predicted mask shape/geometry does not match input volume"
+                )
 
             mask_nifti = Path(tmp) / "mask.nii.gz"
             mask_labels = Path(tmp) / "mask_labels.json"
@@ -78,3 +81,64 @@ def run_segmentation(job_id: int) -> None:
     storage = LocalFileStorage(cfg.storage_dir)
     runner = DentalSegmentatorRunner(cfg.model_dir)
     _run_segmentation(job_id, session_factory, storage, runner)
+
+
+def _as_naive_utc(dt: datetime.datetime) -> datetime.datetime:
+    """Normalize to naive UTC so tz-aware and SQLite-naive values compare cleanly."""
+    if dt.tzinfo is not None:
+        return dt.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+    return dt
+
+
+def _mark_job_failed(session_factory, job_id: int, error: str) -> None:
+    """Mark a job failed unless it already reached a terminal state."""
+    db = session_factory()
+    try:
+        job = db.get(Job, job_id)
+        if job is not None and job.status not in ("done", "failed"):
+            job.status = "failed"
+            job.error = error
+            db.commit()
+    finally:
+        db.close()
+
+
+def reap_stale_jobs(session_factory, timeout_seconds: float,
+                    now: datetime.datetime | None = None) -> int:
+    """Fail jobs stuck in ``running`` past ``timeout_seconds``.
+
+    Covers a worker that was OOM/SIGKILLed mid-inference: it never ran the
+    in-process failure path, so the row would otherwise stay ``running`` forever.
+    Returns the number of jobs reaped.
+    """
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    cutoff = _as_naive_utc(now) - datetime.timedelta(seconds=timeout_seconds)
+    db = session_factory()
+    try:
+        running = db.query(Job).filter(Job.status == "running").all()
+        reaped = 0
+        for job in running:
+            if _as_naive_utc(job.updated_at) < cutoff:
+                job.status = "failed"
+                job.error = "job exceeded time limit (worker presumed dead)"
+                reaped += 1
+        db.commit()
+        return reaped
+    finally:
+        db.close()
+
+
+def handle_job_failure(rq_job, connection, exc_type, exc_value, traceback) -> None:
+    """RQ ``on_failure`` callback: mark the DB job failed when the work-horse dies.
+
+    Fires when RQ moves a job to the failed registry (e.g. the worker monitor
+    detects a killed horse), complementing :func:`reap_stale_jobs`.
+    """
+    from ..config import load_config
+    from ..db.session import make_engine, make_session_factory
+
+    cfg = load_config()
+    engine = make_engine(cfg.db_url)
+    session_factory = make_session_factory(engine)
+    job_id = rq_job.args[0]
+    _mark_job_failed(session_factory, job_id, f"worker failed: {exc_value}")

@@ -14,3 +14,6 @@ def test_enqueue_segmentation_pushes_job(monkeypatch):
     enqueued = registry.jobs[0]
     assert enqueued.args == (42,)
     assert enqueued.func_name == "stomserver.segmentation.worker.run_segmentation"
+
+    from stomserver.segmentation.worker import handle_job_failure
+    assert enqueued.failure_callback is handle_job_failure

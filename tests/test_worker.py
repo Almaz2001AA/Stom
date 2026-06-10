@@ -59,11 +59,95 @@ def test_worker_marks_failed_on_runner_error(db_factory, storage, tmp_path):
     assert "inference exploded" in job.error
 
 
-def test_fake_runner_returns_matching_shape():
+def test_worker_marks_failed_on_geometry_drift(db_factory, storage, tmp_path):
+    """A runner whose prediction geometry differs from the input must be rejected."""
+    from stomcore.geometry import Geometry
+
+    job_id, _ = _seed_study_job(db_factory, storage, tmp_path)
+
+    class DriftRunner:
+        def predict(self, volume):
+            # Same shape, but spacing differs from the input volume's (0.3, 0.3, 0.3).
+            drifted = Geometry.identity(spacing=(1.0, 1.0, 1.0))
+            return np.zeros(volume.shape, dtype=np.uint16), drifted
+
+    _run_segmentation(job_id, db_factory, storage, DriftRunner())
+
+    db = db_factory()
+    job = db.get(Job, job_id)
+    assert job.status == "failed"
+    assert "geometry" in job.error.lower()
+
+
+def _seed_job(db_factory, status, updated_at=None):
+    db = db_factory()
+    acct = Account(name="A")
+    db.add(acct)
+    db.flush()
+    study = Study(account_id=acct.id, original_filename="v", storage_key="k",
+                  shape="[]", spacing="[]")
+    db.add(study)
+    db.flush()
+    kwargs = {}
+    if updated_at is not None:
+        kwargs["updated_at"] = updated_at
+    job = Job(study_id=study.id, account_id=acct.id, model_name="m",
+              status=status, **kwargs)
+    db.add(job)
+    db.commit()
+    return job.id
+
+
+def test_reap_stale_running_jobs_marks_only_old_running(db_factory):
+    import datetime
+
+    from stomserver.segmentation.worker import reap_stale_jobs
+
+    old = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=2)
+    stale_id = _seed_job(db_factory, "running", updated_at=old)
+    fresh_id = _seed_job(db_factory, "running")
+    done_id = _seed_job(db_factory, "done", updated_at=old)
+
+    reaped = reap_stale_jobs(db_factory, timeout_seconds=3600)
+    assert reaped == 1
+
+    db = db_factory()
+    stale = db.get(Job, stale_id)
+    assert stale.status == "failed"
+    assert stale.error
+    assert db.get(Job, fresh_id).status == "running"
+    assert db.get(Job, done_id).status == "done"
+
+
+def test_mark_job_failed_marks_running(db_factory):
+    from stomserver.segmentation.worker import _mark_job_failed
+
+    job_id = _seed_job(db_factory, "running")
+    _mark_job_failed(db_factory, job_id, "worker died")
+
+    db = db_factory()
+    job = db.get(Job, job_id)
+    assert job.status == "failed"
+    assert job.error == "worker died"
+
+
+def test_mark_job_failed_leaves_done_untouched(db_factory):
+    from stomserver.segmentation.worker import _mark_job_failed
+
+    job_id = _seed_job(db_factory, "done")
+    _mark_job_failed(db_factory, job_id, "worker died")
+
+    db = db_factory()
+    assert db.get(Job, job_id).status == "done"
+
+
+def test_fake_runner_returns_labels_and_matching_geometry():
     from stomcore.geometry import Geometry
     from stomcore.volume import Volume
 
-    vol = Volume(np.zeros((6, 5, 4), dtype=np.int16), Geometry.identity(spacing=(1, 1, 1)))
-    labels = FakeRunner().predict(vol)
+    geo = Geometry.identity(spacing=(1, 1, 1))
+    vol = Volume(np.zeros((6, 5, 4), dtype=np.int16), geo)
+    labels, geometry = FakeRunner().predict(vol)
     assert labels.shape == (6, 5, 4)
     assert set(np.unique(labels)).issubset({0, 1, 2, 3, 4, 5})
+    assert geometry == geo

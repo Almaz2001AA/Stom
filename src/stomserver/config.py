@@ -6,6 +6,7 @@ import os
 from dataclasses import dataclass
 
 _DEFAULT_MAX_UPLOAD = 500 * 1024 * 1024  # 500 MB
+_DEFAULT_JOB_TIMEOUT = 60 * 60  # 1 hour; jobs running longer are reaped as stale
 
 
 @dataclass(frozen=True)
@@ -15,6 +16,7 @@ class Config:
     redis_url: str
     model_dir: str
     max_upload_bytes: int
+    job_timeout_seconds: int
 
 
 def load_config() -> Config:
@@ -25,5 +27,8 @@ def load_config() -> Config:
         model_dir=os.environ.get("STOM_MODEL_DIR", "./models"),
         max_upload_bytes=int(
             os.environ.get("STOM_MAX_UPLOAD_BYTES", str(_DEFAULT_MAX_UPLOAD))
+        ),
+        job_timeout_seconds=int(
+            os.environ.get("STOM_JOB_TIMEOUT_SECONDS", str(_DEFAULT_JOB_TIMEOUT))
         ),
     )

@@ -4,7 +4,7 @@ from stomserver.config import load_config
 
 def test_defaults(monkeypatch):
     for var in ["STOM_DB_URL", "STOM_STORAGE_DIR", "STOM_REDIS_URL",
-                "STOM_MODEL_DIR", "STOM_MAX_UPLOAD_BYTES"]:
+                "STOM_MODEL_DIR", "STOM_MAX_UPLOAD_BYTES", "STOM_JOB_TIMEOUT_SECONDS"]:
         monkeypatch.delenv(var, raising=False)
     cfg = load_config()
     assert cfg.db_url == "sqlite:///stom.db"
@@ -12,6 +12,7 @@ def test_defaults(monkeypatch):
     assert cfg.redis_url == "redis://localhost:6379/0"
     assert cfg.model_dir == "./models"
     assert cfg.max_upload_bytes == 500 * 1024 * 1024
+    assert cfg.job_timeout_seconds == 60 * 60
 
 
 def test_env_override(monkeypatch):

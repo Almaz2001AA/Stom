@@ -8,19 +8,31 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 
+def _summarize_validation(exc: RequestValidationError, limit: int = 5) -> str:
+    """Compact, non-leaky summary like 'validation error: file: field required'."""
+    parts = []
+    for err in exc.errors()[:limit]:
+        loc = ".".join(str(p) for p in err.get("loc", ()) if p != "body")
+        msg = err.get("msg", "")
+        parts.append(f"{loc}: {msg}".strip(": ") if loc else msg)
+    summary = "; ".join(p for p in parts if p)
+    return f"validation error: {summary}" if summary else "validation error"
+
+
 def install_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(StarletteHTTPException)
     async def _http(request: Request, exc: StarletteHTTPException):
         return JSONResponse(
             status_code=exc.status_code,
             content={"detail": exc.detail, "code": exc.status_code},
+            headers=getattr(exc, "headers", None),  # e.g. WWW-Authenticate on 401
         )
 
     @app.exception_handler(RequestValidationError)
     async def _validation(request: Request, exc: RequestValidationError):
         return JSONResponse(
             status_code=422,
-            content={"detail": "validation error", "code": 422},
+            content={"detail": _summarize_validation(exc), "code": 422},
         )
 
     @app.exception_handler(Exception)

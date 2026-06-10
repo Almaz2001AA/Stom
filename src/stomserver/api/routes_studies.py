@@ -89,6 +89,9 @@ def segment_study(
     try:
         queue.enqueue_segmentation(job.id)
     except Exception as exc:  # noqa: BLE001 - queue/Redis down
+        # Don't leave a queued Job that will never run: roll it back.
+        db.delete(job)
+        db.commit()
         raise HTTPException(status_code=503, detail=f"queue unavailable: {exc}") from exc
 
     return JobStatus(job_id=job.id, status=job.status, error=job.error)

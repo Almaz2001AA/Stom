@@ -21,5 +21,6 @@ def test_real_runner_predicts_matching_shape():
     geo = Geometry.identity(spacing=(0.4, 0.4, 0.4))
     vol = Volume(np.zeros((32, 32, 32), dtype=np.int16), geo)
     runner = DentalSegmentatorRunner(WEIGHTS_DIR)
-    labels = runner.predict(vol)
+    labels, geometry = runner.predict(vol)
     assert labels.shape == vol.shape
+    assert geometry.is_compatible(geo)

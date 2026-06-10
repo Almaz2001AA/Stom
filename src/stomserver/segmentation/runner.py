@@ -69,7 +69,7 @@ class DentalSegmentatorRunner:
             )
             predictor.initialize_from_trained_model_folder(
                 self._model_dir,
-                use_folds=("all",),
+                use_folds=(0,),  # DentalSegmentator v1.0.0 ships a single fold_0
                 checkpoint_name="checkpoint_final.pth",
             )
             predictor.predict_from_files(

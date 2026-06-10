@@ -34,7 +34,7 @@ def test_masks_served_after_done(client, db_factory, storage, account_token, nif
 
     r2 = client.get(f"/studies/{study_id}/masks/labels", headers=_auth(token))
     assert r2.status_code == 200
-    assert "mandibular-canal" in r2.text
+    assert "Mandibular canal" in r2.text
 
 
 def test_mask_cross_account_404(client, db_factory, account_token, nifti_bytes):

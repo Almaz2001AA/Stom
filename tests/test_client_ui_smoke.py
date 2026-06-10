@@ -40,3 +40,13 @@ def test_slice_widget_renders_loaded_volume(qapp):
     img = widget.render_image()
     assert img.width() == 6   # axial -> x columns
     assert img.height() == 5  # axial -> y rows
+
+
+def test_settings_dialog_values_roundtrip(qapp):
+    from stomclient.config import ClientConfig
+    from stomclient.ui.settings_dialog import SettingsDialog
+
+    dialog = SettingsDialog(ClientConfig(server_url="https://api", token="tok"))
+    cfg = dialog.values()
+    assert cfg.server_url == "https://api"
+    assert cfg.token == "tok"

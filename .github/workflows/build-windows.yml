@@ -1,0 +1,53 @@
+name: build-windows-installer
+
+# Builds the Windows desktop-client installer on a Windows runner and, when a
+# version tag (v*) is pushed, publishes StomClientSetup.exe to a GitHub Release.
+# Trigger manually from the Actions tab (workflow_dispatch) to just get the
+# artifact without a release.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write   # needed to create the Release
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package + build tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[client]" pyinstaller
+
+      - name: Build app with PyInstaller
+        working-directory: packaging
+        run: pyinstaller stom-client.spec --noconfirm
+
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Build installer with Inno Setup
+        working-directory: packaging
+        run: '& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" stom-client.iss'
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: StomClientSetup
+          path: packaging/installer/StomClientSetup.exe
+
+      - name: Publish to Release (on tag)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: packaging/installer/StomClientSetup.exe

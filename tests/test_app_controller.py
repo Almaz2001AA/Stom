@@ -96,3 +96,30 @@ def test_poll_done_with_incompatible_mask_is_rejected():
     assert c.poll() is True
     assert c.state == State.FAILED
     assert "geometry" in c.error.lower()
+
+
+import pytest
+
+
+def test_submit_failure_sets_failed_and_reraises():
+    class BoomCloud:
+        def upload_study(self, nifti_bytes, filename):
+            from stomclient.cloud_client import CloudError
+            raise CloudError("network down")
+
+    c = AppController(BoomCloud())
+    c.load_volume(_volume())
+    with pytest.raises(Exception):
+        c.submit()
+    assert c.state == State.FAILED
+    assert "network down" in c.error
+    # machine is retryable: guard allows submit() again from FAILED
+    with pytest.raises(Exception):
+        c.submit()
+
+
+def test_poll_without_inflight_job_returns_true():
+    c = AppController(FakeCloud([]))
+    c.load_volume(_volume())          # state LOADED, no job
+    assert c.poll() is True           # nothing to poll
+    assert c.state == State.LOADED    # unchanged

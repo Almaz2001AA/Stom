@@ -74,16 +74,24 @@ class AppController:
         self.error = None
         self.state = State.UPLOADING
         self._changed()
-        nifti = volume_to_nifti_bytes(self.volume)
-        info = self._cloud.upload_study(nifti, "study.nii.gz")
-        self.study_id = info.study_id
-        job = self._cloud.start_segmentation(info.study_id)
-        self.job_id = job.job_id
+        try:
+            nifti = volume_to_nifti_bytes(self.volume)
+            info = self._cloud.upload_study(nifti, "study.nii.gz")
+            self.study_id = info.study_id
+            job = self._cloud.start_segmentation(info.study_id)
+            self.job_id = job.job_id
+        except Exception as exc:  # noqa: BLE001 - any failure must leave a retryable FAILED state
+            self.state = State.FAILED
+            self.error = str(exc)
+            self._changed()
+            raise
         self.state = State.SEGMENTING
         self._changed()
 
     def poll(self) -> bool:
         """Poll once. Returns True when the job reached a terminal state."""
+        if self.state is not State.SEGMENTING:
+            return True
         job = self._cloud.poll_status(self.job_id)
         if job.status == "failed":
             self.error = job.error or "segmentation failed"

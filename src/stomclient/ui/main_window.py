@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QObject, QThread, QTimer, Signal
+from PySide6.QtCore import QObject, QThread, QTimer, Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
@@ -16,7 +16,6 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from PySide6.QtCore import Qt
 
 from stomcore.dicom_loader import DicomError, DicomLoader
 from stomcore.mask_io import save_mask_nifti
@@ -28,6 +27,7 @@ from .slice_widget import SliceWidget
 
 
 class _SubmitWorker(QObject):
+    """Runs the blocking submit() off the UI thread."""
     done = Signal()
     failed = Signal(str)
 
@@ -155,6 +155,8 @@ class MainWindow(QMainWindow):
     def _on_segment(self) -> None:
         if self._c.volume is None:
             QMessageBox.information(self, "No study", "Open a DICOM series first.")
+            return
+        if self._thread is not None and self._thread.isRunning():
             return
         self._thread = QThread(self)
         worker = _SubmitWorker(self._c)

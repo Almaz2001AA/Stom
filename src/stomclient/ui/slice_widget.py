@@ -58,8 +58,10 @@ class SliceWidget(QWidget):
     def mousePressEvent(self, event) -> None:
         pos = (event.position().x(), event.position().y())
         if self.measure_mode:
-            self._drag_start = widget_to_image(pos, (self.width(), self.height()), self._image_size())
-            self._drag_end = self._drag_start
+            mapped = widget_to_image(pos, (self.width(), self.height()), self._image_size())
+            if mapped is not None:
+                self._drag_start = mapped
+                self._drag_end = mapped
         else:
             self._wl_anchor = pos
         self.update()
@@ -67,7 +69,9 @@ class SliceWidget(QWidget):
     def mouseMoveEvent(self, event) -> None:
         pos = (event.position().x(), event.position().y())
         if self.measure_mode and self._drag_start is not None:
-            self._drag_end = widget_to_image(pos, (self.width(), self.height()), self._image_size())
+            mapped = widget_to_image(pos, (self.width(), self.height()), self._image_size())
+            if mapped is not None:
+                self._drag_end = mapped
         elif self._wl_anchor is not None:
             dx = pos[0] - self._wl_anchor[0]
             dy = pos[1] - self._wl_anchor[1]

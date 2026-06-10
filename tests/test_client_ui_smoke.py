@@ -88,3 +88,22 @@ def test_main_window_mask_list_populates(qapp):
     window = MainWindow(controller)
     window.refresh()
     assert window.mask_list.count() == 2
+
+
+def test_main_window_segment_guard_when_thread_running(qapp):
+    from stomclient.ui.main_window import MainWindow
+
+    controller = AppController(cloud_client=None)
+    controller.load_volume(
+        Volume(np.zeros((4, 5, 6), dtype=np.int16), Geometry.identity((0.3, 0.3, 0.3)))
+    )
+    window = MainWindow(controller)
+
+    class _FakeRunningThread:
+        def isRunning(self):
+            return True
+
+    window._thread = _FakeRunningThread()
+    window._worker = "sentinel"
+    window._on_segment()  # must early-return because a thread is "running"
+    assert window._worker == "sentinel"  # worker not replaced

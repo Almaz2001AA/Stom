@@ -10,3 +10,6 @@ venv/
 *.dcm
 models/
 *.zip
+
+# brainstorming visual companion
+.superpowers/

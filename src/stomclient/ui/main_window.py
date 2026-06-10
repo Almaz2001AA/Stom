@@ -22,7 +22,9 @@ from stomcore.mask_io import save_mask_nifti
 
 from .. import slice_renderer as sr
 from ..app_controller import AppController, State
-from ..cloud_client import CloudError
+from ..cloud_client import CloudClient, CloudError
+from ..config import load, save
+from .settings_dialog import SettingsDialog
 from .slice_widget import SliceWidget
 
 
@@ -39,7 +41,7 @@ class _SubmitWorker(QObject):
         try:
             self._c.submit()
             self.done.emit()
-        except (CloudError, RuntimeError) as exc:
+        except Exception as exc:  # noqa: BLE001
             self.failed.emit(str(exc))
 
 
@@ -47,6 +49,7 @@ class MainWindow(QMainWindow):
     def __init__(self, controller: AppController) -> None:
         super().__init__()
         self._c = controller
+        self._config = load()
         self.setWindowTitle("Stom — CBCT Viewer")
 
         self.slice_widget = SliceWidget(controller)
@@ -55,6 +58,8 @@ class MainWindow(QMainWindow):
         self._plane.addItems(list(sr.PLANES))
         self._plane.currentTextChanged.connect(self._on_plane)
 
+        settings_btn = QPushButton("Settings…")
+        settings_btn.clicked.connect(self._on_settings)
         open_btn = QPushButton("Open DICOM…")
         open_btn.clicked.connect(self._on_open)
         segment_btn = QPushButton("Upload & Segment")
@@ -73,7 +78,7 @@ class MainWindow(QMainWindow):
         self.mask_list.itemChanged.connect(self._on_mask_item_changed)
 
         left = QVBoxLayout()
-        for w in (open_btn, segment_btn, self._plane, self._measure_btn,
+        for w in (settings_btn, open_btn, segment_btn, self._plane, self._measure_btn,
                   clear_btn, png_btn, mask_btn, QLabel("Masks:"), self.mask_list,
                   self._status):
             left.addWidget(w)
@@ -152,7 +157,21 @@ class MainWindow(QMainWindow):
             labels_path = path.replace(".nii.gz", "").rstrip(".") + "_labels.json"
             save_mask_nifti(self._c.mask, path, labels_path)
 
+    def _on_settings(self) -> None:
+        dialog = SettingsDialog(self._config, self)
+        if dialog.exec():
+            self._apply_config(dialog.values())
+
+    def _apply_config(self, config) -> None:
+        save(config)
+        self._config = config
+        cloud = CloudClient(config.server_url, config.token) if config.server_url else None
+        self._c.set_cloud_client(cloud)
+
     def _on_segment(self) -> None:
+        if not self._config.server_url:
+            QMessageBox.information(self, "No server", "Open Settings and set the server URL.")
+            return
         if self._c.volume is None:
             QMessageBox.information(self, "No study", "Open a DICOM series first.")
             return

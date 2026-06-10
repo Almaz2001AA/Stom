@@ -107,3 +107,15 @@ def test_main_window_segment_guard_when_thread_running(qapp):
     window._worker = "sentinel"
     window._on_segment()  # must early-return because a thread is "running"
     assert window._worker == "sentinel"  # worker not replaced
+
+
+def test_main_window_apply_config_sets_cloud(qapp, monkeypatch):
+    from stomclient.config import ClientConfig
+    from stomclient.ui.main_window import MainWindow
+
+    monkeypatch.setattr("stomclient.ui.main_window.save", lambda *a, **k: None)
+    controller = AppController(cloud_client=None)
+    window = MainWindow(controller)
+    window._apply_config(ClientConfig(server_url="http://x", token="t"))
+    assert window._config.server_url == "http://x"
+    assert controller._cloud is not None

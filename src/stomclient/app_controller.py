@@ -70,6 +70,9 @@ class AppController:
         self.window_width = max(width, 1.0)
         self._changed()
 
+    def set_cloud_client(self, cloud_client) -> None:
+        self._cloud = cloud_client
+
     def set_label_visible(self, label_id: int, visible: bool) -> None:
         if self.mask is None:
             return

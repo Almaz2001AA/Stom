@@ -50,3 +50,12 @@ def test_settings_dialog_values_roundtrip(qapp):
     cfg = dialog.values()
     assert cfg.server_url == "https://api"
     assert cfg.token == "tok"
+
+
+def test_main_window_builds_with_controller(qapp):
+    from stomclient.app_controller import AppController
+    from stomclient.ui.main_window import MainWindow
+
+    window = MainWindow(AppController(cloud_client=None))
+    assert "Stom" in window.windowTitle()
+    assert window.slice_widget is not None

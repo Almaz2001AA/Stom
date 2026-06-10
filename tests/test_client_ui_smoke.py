@@ -59,3 +59,32 @@ def test_main_window_builds_with_controller(qapp):
     window = MainWindow(AppController(cloud_client=None))
     assert "Stom" in window.windowTitle()
     assert window.slice_widget is not None
+
+
+def test_slice_widget_measure_mode_toggle(qapp):
+    from stomclient.ui.slice_widget import SliceWidget
+
+    controller = AppController(cloud_client=None)
+    controller.load_volume(
+        Volume(np.zeros((4, 5, 6), dtype=np.int16), Geometry.identity((0.3, 0.3, 0.3)))
+    )
+    widget = SliceWidget(controller)
+    widget.set_measure_mode(True)
+    assert widget.measure_mode is True
+
+
+def test_main_window_mask_list_populates(qapp):
+    from stomcore.mask import LabelInfo, SegmentationMask
+    from stomclient.ui.main_window import MainWindow
+
+    controller = AppController(cloud_client=None)
+    geo = Geometry.identity((0.3, 0.3, 0.3))
+    controller.load_volume(Volume(np.zeros((4, 5, 6), dtype=np.int16), geo))
+    controller.mask = SegmentationMask(
+        np.zeros((4, 5, 6), dtype=np.uint16), geo,
+        {1: LabelInfo(1, "tooth", (255, 0, 0), True),
+         2: LabelInfo(2, "canal", (0, 255, 0), True)},
+    )
+    window = MainWindow(controller)
+    window.refresh()
+    assert window.mask_list.count() == 2

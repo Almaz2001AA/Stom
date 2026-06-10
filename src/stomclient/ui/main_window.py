@@ -1,4 +1,4 @@
-"""Main window: left panel + slice view + toolbar wiring. Thin over AppController."""
+"""Main window: panel (mask list, tools), slice view, cloud roundtrip wiring."""
 
 from __future__ import annotations
 
@@ -8,14 +8,18 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
     QLabel,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QPushButton,
     QVBoxLayout,
     QWidget,
 )
+from PySide6.QtCore import Qt
 
 from stomcore.dicom_loader import DicomError, DicomLoader
+from stomcore.mask_io import save_mask_nifti
 
 from .. import slice_renderer as sr
 from ..app_controller import AppController, State
@@ -24,8 +28,6 @@ from .slice_widget import SliceWidget
 
 
 class _SubmitWorker(QObject):
-    """Runs the blocking submit() off the UI thread."""
-
     done = Signal()
     failed = Signal(str)
 
@@ -57,12 +59,24 @@ class MainWindow(QMainWindow):
         open_btn.clicked.connect(self._on_open)
         segment_btn = QPushButton("Upload & Segment")
         segment_btn.clicked.connect(self._on_segment)
+        self._measure_btn = QPushButton("Measure")
+        self._measure_btn.setCheckable(True)
+        self._measure_btn.toggled.connect(self.slice_widget.set_measure_mode)
+        clear_btn = QPushButton("Clear measurements")
+        clear_btn.clicked.connect(self._on_clear_measurements)
+        png_btn = QPushButton("Save PNG…")
+        png_btn.clicked.connect(self._on_save_png)
+        mask_btn = QPushButton("Save Mask…")
+        mask_btn.clicked.connect(self._on_save_mask)
+
+        self.mask_list = QListWidget()
+        self.mask_list.itemChanged.connect(self._on_mask_item_changed)
 
         left = QVBoxLayout()
-        left.addWidget(open_btn)
-        left.addWidget(segment_btn)
-        left.addWidget(self._plane)
-        left.addWidget(self._status)
+        for w in (open_btn, segment_btn, self._plane, self._measure_btn,
+                  clear_btn, png_btn, mask_btn, QLabel("Masks:"), self.mask_list,
+                  self._status):
+            left.addWidget(w)
         left.addStretch(1)
         left_panel = QWidget()
         left_panel.setLayout(left)
@@ -79,14 +93,34 @@ class MainWindow(QMainWindow):
         self._poll_timer.timeout.connect(self._on_poll_tick)
         self._thread: QThread | None = None
 
-    def _refresh(self) -> None:
+    def refresh(self) -> None:
         self._status.setText(self._c.state.value)
+        self._rebuild_mask_list()
+        self.slice_widget.update()
+
+    def _rebuild_mask_list(self) -> None:
+        self.mask_list.blockSignals(True)
+        self.mask_list.clear()
+        if self._c.mask is not None:
+            for label_id, info in sorted(self._c.mask.label_map.items()):
+                item = QListWidgetItem(f"{label_id}: {info.name}")
+                item.setData(Qt.ItemDataRole.UserRole, label_id)
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                item.setCheckState(
+                    Qt.CheckState.Checked if info.visible else Qt.CheckState.Unchecked
+                )
+                self.mask_list.addItem(item)
+        self.mask_list.blockSignals(False)
+
+    def _on_mask_item_changed(self, item: QListWidgetItem) -> None:
+        label_id = item.data(Qt.ItemDataRole.UserRole)
+        self._c.set_label_visible(label_id, item.checkState() == Qt.CheckState.Checked)
         self.slice_widget.update()
 
     def _on_plane(self, plane: str) -> None:
         if self._c.volume is not None:
             self._c.set_plane(plane)
-            self._refresh()
+            self.refresh()
 
     def _on_open(self) -> None:
         directory = QFileDialog.getExistingDirectory(self, "Open DICOM series")
@@ -98,7 +132,25 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "DICOM error", str(exc))
             return
         self._c.load_volume(volume)
-        self._refresh()
+        self.refresh()
+
+    def _on_clear_measurements(self) -> None:
+        self._c.clear_measurements()
+        self.slice_widget.update()
+
+    def _on_save_png(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(self, "Save PNG", "slice.png", "PNG (*.png)")
+        if path:
+            self.slice_widget.render_image().save(path, "PNG")
+
+    def _on_save_mask(self) -> None:
+        if self._c.mask is None:
+            QMessageBox.information(self, "No mask", "No mask to save yet.")
+            return
+        path, _ = QFileDialog.getSaveFileName(self, "Save mask", "mask.nii.gz", "NIfTI (*.nii.gz)")
+        if path:
+            labels_path = path.replace(".nii.gz", "").rstrip(".") + "_labels.json"
+            save_mask_nifti(self._c.mask, path, labels_path)
 
     def _on_segment(self) -> None:
         if self._c.volume is None:
@@ -112,17 +164,17 @@ class MainWindow(QMainWindow):
         worker.failed.connect(self._on_submit_failed)
         worker.done.connect(self._thread.quit)
         worker.failed.connect(self._thread.quit)
-        self._worker = worker  # keep ref
+        self._worker = worker
         self._thread.start()
-        self._refresh()
+        self.refresh()
 
     def _on_submitted(self) -> None:
-        self._refresh()
+        self.refresh()
         self._poll_timer.start()
 
     def _on_submit_failed(self, message: str) -> None:
         QMessageBox.critical(self, "Cloud error", message)
-        self._refresh()
+        self.refresh()
 
     def _on_poll_tick(self) -> None:
         try:
@@ -135,4 +187,4 @@ class MainWindow(QMainWindow):
             self._poll_timer.stop()
             if self._c.state == State.FAILED:
                 QMessageBox.warning(self, "Segmentation failed", self._c.error or "")
-        self._refresh()
+        self.refresh()

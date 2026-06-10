@@ -1,33 +1,76 @@
 # Где я остановился — продолжить отсюда
 
-**Последнее обновление:** 2026-06-09. Всё закоммичено и запушено в `origin/master`.
+**Последнее обновление:** 2026-06-10. Всё закоммичено и запушено в `origin/master`.
 
-## Проект
-Аналог DiagnoCAT — AI-сегментация стоматологической CBCT. Гибрид: десктоп-клиент + облако.
-Репозиторий: github.com/Almaz2001AA/Stom (ветка `master`).
+## Статус проекта — ВСЕ 3 ПЛАНА ГОТОВЫ
+- ✅ **Plan 1 — `stomcore`** (Volume/Geometry/Mask, DICOM↔NIfTI, mask_io, CLI).
+- ✅ **Plan 2 — `stomserver`** (FastAPI + RQ + SQLite + auth; DentalSegmentator за runner).
+- ✅ **Plan 3 — `stomclient`** (PySide6-десктоп: вьюер срезов, наложение масок, измерения мм,
+  CloudClient, Settings, экспорт PNG/маски). Влит в master. **122 теста зелёные.**
+- ✅ **Windows-установщик** собирается в GitHub Actions и лежит в Releases:
+  https://github.com/Almaz2001AA/Stom/releases/tag/v0.1.0 (`StomClientSetup.exe`).
+- ✅ **Настоящая сегментация работает** на CPU: веса DentalSegmentator скачаны в
+  `./models/`, runner поправлен (`use_folds=(0,)`), добавлена гармонизация интенсивностей
+  (`harmonize_to_model_domain`) — без неё CBCT этого аппарата давал пустую маску.
+  Проверено на реальном снимке: все 5 структур (зубы/челюсти/канал) выделены.
 
-## Статус по планам
-- ✅ **Plan 1 — Ядро `stomcore`** (Volume/Geometry/SegmentationMask, DICOM↔NIfTI, mask_io, CLI `stom-dicom2nifti`).
-- ✅ **Plan 2 — Backend `stomserver`** (FastAPI API + RQ-воркер + SQLAlchemy/SQLite + LocalFileStorage + bearer-auth/изоляция; модель DentalSegmentator/nnU-Net за runner с FakeRunner). **66 тестов зелёные, 1 slow skipped.**
-- ⬜ **Plan 3 — Десктоп-клиент** (VTK-вьюер, наложение/правка масок, измерения, `CloudClient` к API). ← СЛЕДУЮЩИЙ
+## ЕДИНСТВЕННЫЙ незакрытый момент — туннель ПК → сервер
+Серверная часть полностью готова и крутится. Не доделан **сетевой доступ** из
+установленного приложения на Windows к API сервера.
 
-## Как продолжить завтра
-1. Открыть терминал в `/opt/almaz/test/Stom`.
-2. Если пропал доступ на запись (папка принадлежит `www`): `sudo chown -R alex:alex /opt/almaz/test/Stom`.
-3. Активировать окружение / прогнать тесты: `.venv/bin/python -m pytest -q` (ожидается 66 passed, 1 skipped).
-4. В Claude Code продолжить эту сессию: `claude --continue` (последняя сессия) или `claude --resume` (выбрать из списка).
-5. Сказать Клоду: «начни прорабатывать Plan 3» — пойдём тем же циклом: бриф → спек → план → реализация субагентами с ревью.
+**Сетевая картина:**
+- Сервер за NAT: внешний IP `185.46.68.46`, SSH-порт **`1975`** (НЕ 22), пользователь `alex`,
+  **только ключевая аутентификация** (пароль отключён, есть fail2ban — не плодить
+  неудачные попытки входа, иначе временный бан IP).
+- LAN-IP сервера `192.168.0.131` — из сети пользователя НЕдоступен (все таймауты были из-за этого).
+- ПК пользователя (внешний IP `178.206.229.84`) заходит на сервер через PuTTY с **сохранённой
+  рабочей сессией** (в ней прописан ключ).
 
-## Документы
-- Спеки: `docs/superpowers/specs/2026-06-09-*.md`
-- Планы: `docs/superpowers/plans/2026-06-09-*.md`
-- Follow-ups (отложенное): `docs/superpowers/plans/FOLLOWUPS-*.md`
+**Что сделать завтра, чтобы подключить приложение:**
+1. В **уже открытом** рабочем окне PuTTY: правый клик по заголовку → **Change Settings…** →
+   Connection → SSH → Tunnels → Source `8010`, Destination `127.0.0.1:8010` → **Add** → **Apply**.
+   (Так туннель добавляется в живое соединение — без нового логина и без fail2ban.)
+   Альтернатива: Load рабочей сессии → добавить тот же туннель → Save → Open.
+2. В приложении **Stom CBCT Viewer → Settings**:
+   - Server URL: `http://localhost:8010`
+   - Token: `7oIvkH3GO0d7BsjkROpRR0CHZ03Lue-TF64Id_Bsazk` (лежит в `stom.db`, действует)
+3. **Open DICOM** → **Upload & Segment**. На CPU полный CBCT считается **~10 мин**
+   (боевой runner использует TTA 8×; можно сделать отключаемым через env для скорости ~1.5 мин).
 
-## Запуск backend (dev), если нужно проверить вручную
-См. `src/stomserver/README.md`. Кратко: `pip install -e ".[dev,server]"`, `python scripts/create_account.py "Clinic A"` (выдаст токен), `redis-server`, `uvicorn "stomserver.api.app:create_app" --factory`, `rq worker segmentation`.
+## ВАЖНО: фоновые сервисы могли умереть за ночь — перезапуск
+API/воркер/Redis были запущены как фоновые процессы сессии и, скорее всего, к завтрашнему
+дню остановятся. Поднять заново:
 
-## Память Claude
-Дорожная карта и решения сохранены в памяти проекта (`stom-project-roadmap`), подтянется автоматически в новой сессии.
+```bash
+cd /opt/almaz/test/Stom
+# 1) Redis (бинарь из redislite, без sudo)
+RS=.venv/lib/python3.13/site-packages/redislite/bin/redis-server
+"$RS" --port 6379 --bind 127.0.0.1 --save "" --appendonly no &
+# 2) общий env
+export STOM_DB_URL="sqlite:////opt/almaz/test/Stom/stom.db"
+export STOM_STORAGE_DIR=/opt/almaz/test/Stom/storage
+export STOM_REDIS_URL=redis://localhost:6379/0
+export STOM_MODEL_DIR=/opt/almaz/test/Stom/models/Dataset112_DentalSegmentator_v100/nnUNetTrainer__nnUNetPlans__3d_fullres
+export STOM_MAX_UPLOAD_BYTES=1073741824
+# 3) API на всех интерфейсах (порт 8000 занят чужим процессом → используем 8010)
+.venv/bin/uvicorn "stomserver.api.app:create_app" --factory --host 0.0.0.0 --port 8010 &
+# 4) воркер с реальной моделью
+OMP_NUM_THREADS=14 .venv/bin/rq worker segmentation --url redis://localhost:6379/0 &
+```
+Проверка: `curl -s http://localhost:8010/healthz` → `{"status":"ok"}`.
+Если `stom.db` пропал — новый токен: `STOM_DB_URL=... .venv/bin/python scripts/create_account.py "Clinic A"`.
 
-## ВАЖНО (безопасность)
-Если ещё не сделано — **отозвать Personal Access Token** на GitHub (Settings → Developer settings → Tokens), он засветился в переписке. `~/.git-credentials` на диске содержит токен в открытом виде.
+## Полезные пути и факты
+- Тестовый реальный CBCT: `/opt/almaz/test/Stom/20241021-...ГалееваЛяйсан...CT...` (100×700×700, 0.2мм).
+- Веса модели: `models/Dataset112_DentalSegmentator_v100/nnUNetTrainer__nnUNetPlans__3d_fullres`.
+- GPU нет → инференс на CPU. Демо-скрипт сегментации с рендером: `/tmp/seg_real3.py` (могу пересоздать).
+- Память Клода: `stom-project-roadmap`, `dentalsegmentator-intensity-harmonization` — подтянутся сами.
+
+## Открытые follow-ups (по желанию)
+- Сделать TTA-зеркалирование отключаемым через env (ускорить CPU-инференс ~8×).
+- Гармонизацию сейчас применяю всегда; при необходимости сделать «умной» (только если вход далёк от домена).
+- Прочие отложенные — в `docs/superpowers/plans/FOLLOWUPS-*.md`.
+
+## Как продолжить
+Открыть Claude Code в `/opt/almaz/test/Stom`, `claude --continue`, сказать:
+«подними бэкенд по CONTINUE-HERE и доведём туннель/приложение».

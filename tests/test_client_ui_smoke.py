@@ -98,6 +98,12 @@ def test_main_window_segment_guard_when_thread_running(qapp):
         Volume(np.zeros((4, 5, 6), dtype=np.int16), Geometry.identity((0.3, 0.3, 0.3)))
     )
     window = MainWindow(controller)
+    # Configure a server so _on_segment passes the no-server guard (which would
+    # otherwise pop a modal QMessageBox and block headlessly) and reaches the
+    # thread-running guard under test.
+    from stomclient.config import ClientConfig
+
+    window._config = ClientConfig(server_url="http://x", token="t")
 
     class _FakeRunningThread:
         def isRunning(self):

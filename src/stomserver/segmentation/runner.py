@@ -9,6 +9,35 @@ import numpy as np
 from stomcore.geometry import Geometry
 from stomcore.volume import Volume
 
+# DentalSegmentator (Dataset112) foreground intensity stats, from the weights'
+# dataset_fingerprint.json. The model's CTNormalization assumes inputs live in
+# this CT/HU-like domain; CBCT with a different intensity calibration must be
+# mapped onto it or the model returns an empty (all-background) mask.
+MODEL_FG_MEAN = 1178.26
+MODEL_FG_STD = 611.71
+_AIR_THRESHOLD = -1000.0
+
+
+def harmonize_to_model_domain(
+    voxels: np.ndarray, air_threshold: float = _AIR_THRESHOLD
+) -> np.ndarray:
+    """Z-score-map foreground intensities onto the model's training domain.
+
+    Foreground (voxels above ``air_threshold``) is recentred to
+    ``MODEL_FG_MEAN``/``MODEL_FG_STD`` so scanners with non-HU calibration look
+    like the training data. Degenerate volumes (no foreground or ~zero variance)
+    are returned unchanged.
+    """
+    fg = voxels > air_threshold
+    if int(fg.sum()) < 1000:
+        return voxels
+    mu = float(voxels[fg].mean())
+    sd = float(voxels[fg].std())
+    if sd < 1.0:
+        return voxels
+    out = (voxels.astype(np.float32) - mu) / sd * MODEL_FG_STD + MODEL_FG_MEAN
+    return np.clip(out, -1024.0, 4000.0).astype(np.int16)
+
 
 class SegmentationRunner(Protocol):
     def predict(self, volume: Volume) -> tuple[np.ndarray, Geometry]:
@@ -54,13 +83,17 @@ class DentalSegmentatorRunner:
 
         from stomcore.sitk_interop import geometry_from_sitk, sitk_from_volume
 
+        # Map this scanner's intensities onto the model's training domain so
+        # non-HU CBCT does not segment to an empty mask.
+        harmonized = Volume(harmonize_to_model_domain(volume.voxels), volume.geometry)
+
         with tempfile.TemporaryDirectory() as tmp:
             in_dir = Path(tmp) / "in"
             out_dir = Path(tmp) / "out"
             in_dir.mkdir()
             out_dir.mkdir()
             # nnU-Net expects <case>_<channel:04d>.nii.gz
-            sitk.WriteImage(sitk_from_volume(volume), str(in_dir / "case_0000.nii.gz"),
+            sitk.WriteImage(sitk_from_volume(harmonized), str(in_dir / "case_0000.nii.gz"),
                             useCompression=True)
 
             predictor = nnUNetPredictor(

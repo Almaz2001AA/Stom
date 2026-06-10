@@ -1,7 +1,8 @@
 import httpx
+import pytest
 import respx
 
-from stomclient.cloud_client import CloudClient, JobStatus, StudyInfo
+from stomclient.cloud_client import AuthError, CloudClient, CloudError, JobStatus, NotReady, StudyInfo
 
 BASE = "https://api.test"
 
@@ -58,3 +59,37 @@ def test_download_mask_returns_both_blobs():
     mask, labels = _client().download_mask(7)
     assert mask == b"MASK"
     assert labels == b"{}"
+
+
+@respx.mock
+def test_401_raises_auth_error():
+    respx.get(f"{BASE}/jobs/1").mock(return_value=httpx.Response(401, json={"detail": "x"}))
+    with pytest.raises(AuthError):
+        _client().poll_status(1)
+
+
+@respx.mock
+def test_409_raises_not_ready():
+    respx.get(f"{BASE}/studies/1/masks").mock(return_value=httpx.Response(409))
+    with pytest.raises(NotReady):
+        _client().download_mask(1)
+
+
+@respx.mock
+def test_500_retries_then_succeeds():
+    route = respx.get(f"{BASE}/jobs/2")
+    route.side_effect = [
+        httpx.Response(500),
+        httpx.Response(200, json={"job_id": 2, "status": "done", "error": None}),
+    ]
+    client = CloudClient(BASE, token="t", retries=1, sleep=lambda *_: None)
+    assert client.poll_status(2).status == "done"
+    assert route.call_count == 2
+
+
+@respx.mock
+def test_network_error_after_retries_raises_cloud_error():
+    respx.get(f"{BASE}/jobs/9").mock(side_effect=httpx.ConnectError("boom"))
+    client = CloudClient(BASE, token="t", retries=1, sleep=lambda *_: None)
+    with pytest.raises(CloudError):
+        client.poll_status(9)

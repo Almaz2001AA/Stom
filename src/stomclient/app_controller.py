@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 from enum import Enum
 
+from stomcore.mask import SegmentationMask
 from stomcore.volume import Volume
 
 from . import slice_renderer as sr
-from .measurement import MeasurementSet
+from .measurement import LinearMeasurement, MeasurementSet
 from .serialization import mask_from_bytes, volume_to_nifti_bytes
 
 
@@ -66,6 +68,29 @@ class AppController:
     def set_window_level(self, center: float, width: float) -> None:
         self.window_center = center
         self.window_width = max(width, 1.0)
+        self._changed()
+
+    def set_label_visible(self, label_id: int, visible: bool) -> None:
+        if self.mask is None:
+            return
+        info = self.mask.label_map.get(label_id)
+        if info is None:
+            return
+        new_map = dict(self.mask.label_map)
+        new_map[label_id] = replace(info, visible=visible)
+        self.mask = SegmentationMask(self.mask.labels, self.mask.geometry, new_map)
+        self._changed()
+
+    def add_measurement(self, p0: tuple[float, float], p1: tuple[float, float]) -> None:
+        if self.volume is None:
+            return
+        self.measurements.add(
+            LinearMeasurement(p0, p1, self.plane, self.volume.geometry)
+        )
+        self._changed()
+
+    def clear_measurements(self) -> None:
+        self.measurements.clear()
         self._changed()
 
     def submit(self) -> None:

@@ -123,3 +123,22 @@ def test_poll_without_inflight_job_returns_true():
     c.load_volume(_volume())          # state LOADED, no job
     assert c.poll() is True           # nothing to poll
     assert c.state == State.LOADED    # unchanged
+
+
+def test_set_label_visible_toggles():
+    geo = Geometry.identity((0.3, 0.3, 0.3))
+    c = AppController(FakeCloud([]))
+    c.load_volume(_volume(geo))
+    labels = np.zeros((4, 5, 6), dtype=np.uint16)
+    c.mask = SegmentationMask(labels, geo, {1: LabelInfo(1, "t", (255, 0, 0), True)})
+    c.set_label_visible(1, False)
+    assert c.mask.label_map[1].visible is False
+
+
+def test_add_and_clear_measurements():
+    c = AppController(FakeCloud([]))
+    c.load_volume(_volume())
+    c.add_measurement((0.0, 0.0), (0.0, 10.0))
+    assert len(c.measurements) == 1
+    c.clear_measurements()
+    assert len(c.measurements) == 0

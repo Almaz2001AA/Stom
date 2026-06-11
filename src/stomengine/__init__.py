@@ -13,6 +13,7 @@ from .runner import (
     FakeRunner,
     SegmentationRunner,
     harmonize_to_model_domain,
+    tta_enabled,
 )
 
 __all__ = [
@@ -24,4 +25,5 @@ __all__ = [
     "SegmentationRunner",
     "SubprocessEngine",
     "harmonize_to_model_domain",
+    "tta_enabled",
 ]

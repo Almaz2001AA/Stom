@@ -13,6 +13,7 @@ from stomengine.runner import (  # noqa: F401
     FakeRunner,
     SegmentationRunner,
     harmonize_to_model_domain,
+    tta_enabled,
 )
 
 __all__ = [
@@ -22,4 +23,5 @@ __all__ = [
     "FakeRunner",
     "SegmentationRunner",
     "harmonize_to_model_domain",
+    "tta_enabled",
 ]

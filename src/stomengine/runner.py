@@ -2,12 +2,28 @@
 
 from __future__ import annotations
 
+import os
+from collections.abc import Mapping
 from typing import Protocol
 
 import numpy as np
 
 from stomcore.geometry import Geometry
 from stomcore.volume import Volume
+
+_TTA_DISABLE_VALUES = {"1", "true", "yes", "on"}
+
+
+def tta_enabled(env: Mapping[str, str] | None = None) -> bool:
+    """Whether test-time augmentation (mirroring) is on for inference.
+
+    TTA evaluates every mirror of each tile, roughly octupling CPU inference
+    time for a small accuracy gain. Set ``STOM_DISABLE_TTA`` to a truthy value
+    (``1``/``true``/``yes``/``on``) to turn it off for ~8x faster local
+    segmentation (≈1.5-2 min instead of ~10). Default: enabled.
+    """
+    env = os.environ if env is None else env
+    return env.get("STOM_DISABLE_TTA", "").strip().lower() not in _TTA_DISABLE_VALUES
 
 # DentalSegmentator (Dataset112) foreground intensity stats, from the weights'
 # dataset_fingerprint.json. The model's CTNormalization assumes inputs live in
@@ -70,8 +86,11 @@ class DentalSegmentatorRunner:
     runs on CPU when no GPU is available.
     """
 
-    def __init__(self, model_dir: str) -> None:
+    def __init__(self, model_dir: str, *, use_tta: bool | None = None) -> None:
         self._model_dir = model_dir
+        # TTA mirroring ~8x's CPU inference; resolve from STOM_DISABLE_TTA unless
+        # an explicit choice is passed.
+        self._use_tta = tta_enabled() if use_tta is None else use_tta
 
     def predict(self, volume: Volume) -> tuple[np.ndarray, Geometry]:
         import tempfile
@@ -98,6 +117,7 @@ class DentalSegmentatorRunner:
 
             predictor = nnUNetPredictor(
                 device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
+                use_mirroring=self._use_tta,
                 allow_tqdm=False,
             )
             predictor.initialize_from_trained_model_folder(

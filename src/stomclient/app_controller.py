@@ -24,8 +24,16 @@ class State(str, Enum):
 
 
 class AppController:
-    def __init__(self, cloud_client, on_change: Callable[[], None] = lambda: None) -> None:
+    def __init__(
+        self,
+        cloud_client,
+        on_change: Callable[[], None] = lambda: None,
+        *,
+        engine=None,
+    ) -> None:
         self._cloud = cloud_client
+        self._engine = engine
+        self.local = False
         self._on_change = on_change
         self.state = State.EMPTY
         self.volume: Volume | None = None
@@ -96,10 +104,27 @@ class AppController:
         self.measurements.clear()
         self._changed()
 
+    @property
+    def local_available(self) -> bool:
+        return self._engine is not None
+
+    def set_local_mode(self, enabled: bool) -> None:
+        """Choose local (on-device) segmentation over the cloud backend."""
+        if enabled and self._engine is None:
+            raise RuntimeError("local segmentation engine not available")
+        self.local = enabled
+        self._changed()
+
     def submit(self) -> None:
         if self.state not in (State.LOADED, State.FAILED, State.MASK_READY):
             raise RuntimeError(f"cannot submit from state {self.state}")
         self.error = None
+        if self.local:
+            self._submit_local()
+        else:
+            self._submit_cloud()
+
+    def _submit_cloud(self) -> None:
         self.state = State.UPLOADING
         self._changed()
         try:
@@ -114,6 +139,32 @@ class AppController:
             self._changed()
             raise
         self.state = State.SEGMENTING
+        self._changed()
+
+    def _submit_local(self) -> None:
+        """Run segmentation on-device. Blocking; callers run it off the UI thread.
+
+        Goes straight to MASK_READY (no upload/poll) since the engine produces
+        the mask synchronously. Any failure leaves a retryable FAILED state.
+        """
+        if self._engine is None:
+            raise RuntimeError("local segmentation engine not available")
+        self.state = State.SEGMENTING
+        self._changed()
+        try:
+            mask = self._engine.segment(self.volume)
+        except Exception as exc:  # noqa: BLE001 - any failure must leave a retryable FAILED state
+            self.state = State.FAILED
+            self.error = str(exc)
+            self._changed()
+            raise
+        if not mask.is_compatible_with(self.volume):
+            self.state = State.FAILED
+            self.error = "returned mask geometry does not match volume"
+            self._changed()
+            return
+        self.mask = mask
+        self.state = State.MASK_READY
         self._changed()
 
     def poll(self) -> bool:

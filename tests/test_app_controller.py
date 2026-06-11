@@ -125,6 +125,72 @@ def test_poll_without_inflight_job_returns_true():
     assert c.state == State.LOADED    # unchanged
 
 
+class FakeEngine:
+    """Local engine stand-in: returns a prepared mask or raises."""
+
+    def __init__(self, mask=None, boom=None):
+        self._mask = mask
+        self._boom = boom
+        self.called = False
+
+    def segment(self, volume):
+        self.called = True
+        if self._boom is not None:
+            raise self._boom
+        return self._mask
+
+
+def _mask(geo, shape=(4, 5, 6)):
+    labels = np.zeros(shape, dtype=np.uint16)
+    labels[0, 0, 0] = 1
+    return SegmentationMask(labels, geo, {1: LabelInfo(1, "t", (255, 0, 0), True)})
+
+
+def test_local_mode_submit_produces_mask_without_cloud():
+    geo = Geometry.identity((0.3, 0.3, 0.3))
+    cloud = FakeCloud([])
+    engine = FakeEngine(mask=_mask(geo))
+    c = AppController(cloud, engine=engine)
+    c.load_volume(_volume(geo))
+    c.set_local_mode(True)
+    c.submit()
+    assert engine.called is True
+    assert cloud.uploaded is False          # nothing uploaded in local mode
+    assert c.state == State.MASK_READY
+    assert c.mask is not None
+    assert c.poll() is True                  # already terminal
+
+
+def test_local_mode_failure_sets_failed_and_reraises():
+    engine = FakeEngine(boom=RuntimeError("out of memory"))
+    c = AppController(FakeCloud([]), engine=engine)
+    c.load_volume(_volume())
+    c.set_local_mode(True)
+    with pytest.raises(RuntimeError):
+        c.submit()
+    assert c.state == State.FAILED
+    assert "out of memory" in c.error
+
+
+def test_local_mode_incompatible_mask_rejected():
+    vol_geo = Geometry.identity((0.3, 0.3, 0.3))
+    drift_geo = Geometry.identity((1.0, 1.0, 1.0))
+    engine = FakeEngine(mask=_mask(drift_geo))
+    c = AppController(FakeCloud([]), engine=engine)
+    c.load_volume(_volume(vol_geo))
+    c.set_local_mode(True)
+    c.submit()
+    assert c.state == State.FAILED
+    assert "geometry" in c.error.lower()
+
+
+def test_set_local_mode_without_engine_raises():
+    c = AppController(FakeCloud([]))          # no engine wired
+    assert c.local_available is False
+    with pytest.raises(RuntimeError):
+        c.set_local_mode(True)
+
+
 def test_set_label_visible_toggles():
     geo = Geometry.identity((0.3, 0.3, 0.3))
     c = AppController(FakeCloud([]))

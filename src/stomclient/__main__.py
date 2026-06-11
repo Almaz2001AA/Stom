@@ -11,13 +11,15 @@ def main() -> int:
     from .app_controller import AppController
     from .cloud_client import CloudClient
     from .config import load
+    from .local_engine import build_local_engine
     from .ui.main_window import MainWindow
 
     config = load()
     cloud = CloudClient(config.server_url, config.token) if config.server_url else None
+    engine = build_local_engine()
 
     app = QApplication(sys.argv)
-    window = MainWindow(AppController(cloud_client=cloud))
+    window = MainWindow(AppController(cloud_client=cloud, engine=engine))
     window.resize(1100, 800)
     window.show()
     return app.exec()

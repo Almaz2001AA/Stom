@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMainWindow,
     QMessageBox,
+    QProgressDialog,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -46,6 +47,24 @@ class _SubmitWorker(QObject):
             self.failed.emit(str(exc))
 
 
+class _InstallWorker(QObject):
+    """Downloads + installs the engine-pack off the UI thread."""
+    progress = Signal(int, int)  # (bytes_done, bytes_total)
+    done = Signal(object)        # the ready engine
+    failed = Signal(str)
+
+    def __init__(self, provision_fn) -> None:
+        super().__init__()
+        self._provision = provision_fn
+
+    def run(self) -> None:
+        try:
+            engine = self._provision(progress=lambda d, t: self.progress.emit(d, t))
+            self.done.emit(engine)
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit(str(exc))
+
+
 class MainWindow(QMainWindow):
     def __init__(self, controller: AppController) -> None:
         super().__init__()
@@ -75,6 +94,12 @@ class MainWindow(QMainWindow):
             else "Local engine not installed."
         )
         self._local_chk.toggled.connect(self._on_local_toggled)
+        # First-run install of the engine-pack: shown only until an engine is
+        # wired, so the checkbox above can actually be enabled on a slim client.
+        self._install_btn = QPushButton("Install local engine…")
+        self._install_btn.setToolTip("Download the on-device segmentation engine (~0.5 GB).")
+        self._install_btn.setVisible(not self._c.local_available)
+        self._install_btn.clicked.connect(self._on_install_engine)
         self._measure_btn = QPushButton("Measure")
         self._measure_btn.setCheckable(True)
         self._measure_btn.toggled.connect(self.slice_widget.set_measure_mode)
@@ -90,7 +115,7 @@ class MainWindow(QMainWindow):
 
         left = QVBoxLayout()
         for w in (settings_btn, open_btn, self._segment_btn, self._local_chk,
-                  self._plane, self._measure_btn,
+                  self._install_btn, self._plane, self._measure_btn,
                   clear_btn, png_btn, mask_btn, QLabel("Masks:"), self.mask_list,
                   self._status):
             left.addWidget(w)
@@ -109,6 +134,8 @@ class MainWindow(QMainWindow):
         self._poll_timer.setInterval(2000)
         self._poll_timer.timeout.connect(self._on_poll_tick)
         self._thread: QThread | None = None
+        self._install_thread: QThread | None = None
+        self._install_progress: QProgressDialog | None = None
 
     def refresh(self) -> None:
         self._status.setText(self._c.state.value)
@@ -183,6 +210,54 @@ class MainWindow(QMainWindow):
     def _on_local_toggled(self, checked: bool) -> None:
         self._c.set_local_mode(checked)
         self._segment_btn.setText("Segment (local)" if checked else "Upload & Segment")
+
+    def _on_install_engine(self) -> None:
+        if self._install_thread is not None and self._install_thread.isRunning():
+            return
+        from ..local_engine import provision_local_engine
+
+        self._install_btn.setEnabled(False)
+        self._install_progress = QProgressDialog(
+            "Downloading on-device engine…", None, 0, 100, self
+        )
+        self._install_progress.setWindowTitle("Install local engine")
+        self._install_progress.setWindowModality(Qt.WindowModality.WindowModal)
+        self._install_progress.setAutoClose(True)
+        self._install_progress.setMinimumDuration(0)
+        self._install_progress.setValue(0)
+
+        self._install_thread = QThread(self)
+        worker = _InstallWorker(provision_local_engine)
+        worker.moveToThread(self._install_thread)
+        self._install_thread.started.connect(worker.run)
+        worker.progress.connect(self._on_install_progress)
+        worker.done.connect(self._on_install_done)
+        worker.failed.connect(self._on_install_failed)
+        worker.done.connect(self._install_thread.quit)
+        worker.failed.connect(self._install_thread.quit)
+        self._install_worker = worker
+        self._install_thread.start()
+
+    def _on_install_progress(self, done: int, total: int) -> None:
+        if total > 0:
+            self._install_progress.setValue(min(100, done * 100 // total))
+
+    def _on_install_done(self, engine: object) -> None:
+        if self._install_progress is not None:
+            self._install_progress.reset()
+        self._install_btn.setEnabled(True)
+        self._install_btn.setVisible(False)
+        self._c.set_engine(engine)
+        self._local_chk.setEnabled(True)
+        self._local_chk.setToolTip("Segment on this PC — no server upload.")
+        self._local_chk.setChecked(True)
+        QMessageBox.information(self, "Local engine", "On-device engine installed.")
+
+    def _on_install_failed(self, message: str) -> None:
+        if self._install_progress is not None:
+            self._install_progress.reset()
+        self._install_btn.setEnabled(True)
+        QMessageBox.critical(self, "Install failed", message)
 
     def _on_segment(self) -> None:
         if not self._c.local and not self._config.server_url:

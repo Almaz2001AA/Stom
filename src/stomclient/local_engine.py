@@ -11,7 +11,27 @@ the heavy imports happen only when inference actually runs.
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from pathlib import Path
+
+ProgressCb = Callable[[int, int], None]  # (bytes_done, bytes_total)
+
+
+def provision_local_engine(progress: ProgressCb | None = None):
+    """Download + install the engine-pack and return a ready ``SubprocessEngine``.
+
+    Used by the slim client's first-run "Install local engine" action: fetch the
+    release manifest, download + verify + extract the engine-pack, and point a
+    subprocess engine at the unpacked binary. Raises on any failure (network,
+    checksum, missing binary) so the caller can surface it to the user.
+    """
+    from stomengine import SubprocessEngine
+
+    from . import engine_pack
+
+    manifest = engine_pack.fetch_manifest()
+    exe = engine_pack.provision(manifest, progress=progress)
+    return SubprocessEngine(str(exe))
 
 
 def build_local_engine(model_dir: str | None = None):

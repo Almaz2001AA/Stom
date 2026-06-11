@@ -191,6 +191,17 @@ def test_set_local_mode_without_engine_raises():
         c.set_local_mode(True)
 
 
+def test_set_engine_enables_local_and_notifies():
+    geo = Geometry.identity((0.3, 0.3, 0.3))
+    fired = []
+    c = AppController(FakeCloud([]), on_change=lambda: fired.append(1))
+    assert c.local_available is False
+    c.set_engine(FakeEngine(mask=_mask(geo)))
+    assert c.local_available is True
+    assert fired                              # change notification fired
+    c.set_local_mode(True)                    # no longer raises
+
+
 def test_set_label_visible_toggles():
     geo = Geometry.identity((0.3, 0.3, 0.3))
     c = AppController(FakeCloud([]))

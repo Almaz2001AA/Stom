@@ -108,6 +108,11 @@ class AppController:
     def local_available(self) -> bool:
         return self._engine is not None
 
+    def set_engine(self, engine) -> None:
+        """Wire in a local engine after first-run install; enables local mode."""
+        self._engine = engine
+        self._changed()
+
     def set_local_mode(self, enabled: bool) -> None:
         """Choose local (on-device) segmentation over the cloud backend."""
         if enabled and self._engine is None:

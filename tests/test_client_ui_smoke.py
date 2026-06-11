@@ -115,6 +115,29 @@ def test_main_window_segment_guard_when_thread_running(qapp):
     assert window._worker == "sentinel"  # worker not replaced
 
 
+def test_install_button_offered_then_enables_local(qapp, monkeypatch):
+    from stomclient.ui.main_window import MainWindow
+
+    # The success path pops an info box; no-op it so the test stays headless.
+    monkeypatch.setattr("stomclient.ui.main_window.QMessageBox.information",
+                        lambda *a, **k: None)
+    controller = AppController(cloud_client=None)  # slim first run: no engine
+    window = MainWindow(controller)
+    # Install offered, local checkbox disabled until an engine is wired.
+    assert window._install_btn.isHidden() is False
+    assert window._local_chk.isEnabled() is False
+
+    class _Eng:
+        def segment(self, volume):  # pragma: no cover - not exercised here
+            return None
+
+    window._on_install_done(_Eng())  # simulate a finished download
+    assert controller.local_available is True
+    assert window._local_chk.isEnabled() is True
+    assert window._install_btn.isHidden() is True  # no longer offered
+    assert controller.local is True                # auto-selected local mode
+
+
 def test_main_window_apply_config_sets_cloud(qapp, monkeypatch):
     from stomclient.config import ClientConfig
     from stomclient.ui.main_window import MainWindow

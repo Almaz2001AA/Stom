@@ -1,0 +1,57 @@
+name: smoke-windows-install
+
+# Manual smoke test of the published release on a clean Windows VM:
+#   1. download + silently install StomClientSetup.exe from a release tag
+#   2. verify the installed slim GUI binary exists
+#   3. run the EXACT first-local-run path the GUI uses: fetch the engine-pack
+#      manifest, download + SHA-256 verify + extract the engine-pack, then run
+#      real DentalSegmentator inference via SubprocessEngine on a synthetic
+#      volume (TTA off for speed).
+#
+# Pick the release tag with the `tag` input (default: latest published).
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to test (e.g. v0.1.2)"
+        required: true
+        default: "v0.1.2"
+
+jobs:
+  smoke:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # stomcore (numpy/SimpleITK) + the client package drive provisioning and
+      # build the synthetic volume. No torch here — it lives in the engine-pack.
+      - name: Install client package (no inference stack)
+        run: pip install -e ".[client]"
+
+      - name: Download + silently install StomClientSetup.exe
+        shell: pwsh
+        env:
+          TAG: ${{ github.event.inputs.tag }}
+        run: |
+          $url = "https://github.com/${env:GITHUB_REPOSITORY}/releases/download/$env:TAG/StomClientSetup.exe"
+          Write-Host "downloading installer: $url"
+          Invoke-WebRequest -Uri $url -OutFile StomClientSetup.exe
+          Write-Host "running silent install..."
+          Start-Process -FilePath .\StomClientSetup.exe `
+            -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait
+          $exe = Join-Path $env:ProgramFiles 'StomClient\stom-client.exe'
+          if (-not (Test-Path $exe)) {
+            throw "install failed: $exe not found"
+          }
+          Write-Host "installed OK: $exe ($((Get-Item $exe).Length) bytes)"
+
+      - name: First-run engine-pack provisioning + real inference
+        shell: pwsh
+        env:
+          STOM_DISABLE_TTA: "1"
+        run: python .github/scripts/smoke_engine_pack.py

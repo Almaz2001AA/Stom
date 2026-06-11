@@ -10,7 +10,17 @@ for _pkg in ("SimpleITK", "PySide6"):
     binaries += _b
     hiddenimports += _h
 
-hiddenimports += ["stomcore", "stomclient"]
+hiddenimports += ["stomcore", "stomclient", "stomengine"]
+
+# Keep the GUI installer slim: the on-device inference stack (torch + nnU-Net and
+# its transitive deps) is NOT bundled here. stomengine imports them lazily inside
+# predict(); the slim client either runs cloud mode or, in local mode, shells out
+# to the separately-downloaded engine-pack (Phase B). Excluding them drops ~1.5 GB.
+_ENGINE_DEPS = [
+    "torch", "torchvision", "nnunetv2", "acvl_utils",
+    "dynamic_network_architectures", "batchgenerators", "batchgeneratorsv2",
+    "sklearn", "scipy", "pandas", "matplotlib",
+]
 
 a = Analysis(
     ["launch.py"],
@@ -20,7 +30,8 @@ a = Analysis(
     hiddenimports=hiddenimports,
     hookspath=[],
     runtime_hooks=[],
-    excludes=["stomserver", "fastapi", "uvicorn", "rq", "redis", "sqlalchemy"],
+    excludes=["stomserver", "fastapi", "uvicorn", "rq", "redis", "sqlalchemy"]
+    + _ENGINE_DEPS,
     noarchive=False,
 )
 pyz = PYZ(a.pure)

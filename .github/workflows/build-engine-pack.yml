@@ -1,0 +1,82 @@
+name: build-engine-pack
+
+# Builds the on-device engine-pack (self-contained `stom-engine` CLI bundling
+# torch CPU + nnU-Net + DentalSegmentator weights) on a Windows runner. On a
+# version tag (v*) it publishes the zip + manifest to the GitHub Release; the
+# slim desktop client downloads them on first local segmentation.
+#
+# REQUIRES repository variable WEIGHTS_URL: a direct download for the
+# DentalSegmentator weights archive (the Dataset112_* folder). The weights are
+# ~236 MB and are NOT committed to the repo.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package + inference stack + PyInstaller
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -e ".[nnunet]" pyinstaller
+          pip install scikit-image
+
+      - name: Fetch model weights
+        shell: pwsh
+        env:
+          WEIGHTS_URL: ${{ vars.WEIGHTS_URL }}
+        run: |
+          if (-not $env:WEIGHTS_URL) {
+            throw "Set repository variable WEIGHTS_URL to the DentalSegmentator weights archive URL."
+          }
+          New-Item -ItemType Directory -Force -Path models | Out-Null
+          Invoke-WebRequest -Uri $env:WEIGHTS_URL -OutFile weights.zip
+          Expand-Archive -Path weights.zip -DestinationPath models -Force
+          if (-not (Test-Path "models/Dataset112_DentalSegmentator_v100")) {
+            throw "Weights archive did not contain models/Dataset112_DentalSegmentator_v100"
+          }
+
+      - name: Build engine-pack with PyInstaller
+        working-directory: packaging
+        run: pyinstaller stom-engine.spec --noconfirm
+
+      - name: Zip engine-pack + write manifest
+        shell: pwsh
+        run: |
+          $version = if ($env:GITHUB_REF -like "refs/tags/*") { $env:GITHUB_REF_NAME } else { "dev" }
+          $zip = "stom-engine-pack-win64.zip"
+          Compress-Archive -Path packaging/dist/stom-engine/* -DestinationPath $zip -Force
+          $sha = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          $url = "https://github.com/${env:GITHUB_REPOSITORY}/releases/latest/download/$zip"
+          @{ version = $version; url = $url; sha256 = $sha } | ConvertTo-Json | Out-File -Encoding ascii engine-pack-manifest.json
+          Get-Content engine-pack-manifest.json
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: engine-pack
+          path: |
+            stom-engine-pack-win64.zip
+            engine-pack-manifest.json
+
+      - name: Publish to Release (on tag)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            stom-engine-pack-win64.zip
+            engine-pack-manifest.json

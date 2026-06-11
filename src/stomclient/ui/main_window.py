@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import QObject, QThread, QTimer, Qt, Signal
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QFileDialog,
     QHBoxLayout,
@@ -62,8 +63,18 @@ class MainWindow(QMainWindow):
         settings_btn.clicked.connect(self._on_settings)
         open_btn = QPushButton("Open DICOM…")
         open_btn.clicked.connect(self._on_open)
-        segment_btn = QPushButton("Upload & Segment")
-        segment_btn.clicked.connect(self._on_segment)
+        self._segment_btn = QPushButton("Upload & Segment")
+        self._segment_btn.clicked.connect(self._on_segment)
+        # Local (on-device) segmentation: only offered when an engine is wired,
+        # so there is no network round-trip for the large study upload.
+        self._local_chk = QCheckBox("Local (on-device)")
+        self._local_chk.setEnabled(self._c.local_available)
+        self._local_chk.setToolTip(
+            "Segment on this PC — no server upload."
+            if self._c.local_available
+            else "Local engine not installed."
+        )
+        self._local_chk.toggled.connect(self._on_local_toggled)
         self._measure_btn = QPushButton("Measure")
         self._measure_btn.setCheckable(True)
         self._measure_btn.toggled.connect(self.slice_widget.set_measure_mode)
@@ -78,7 +89,8 @@ class MainWindow(QMainWindow):
         self.mask_list.itemChanged.connect(self._on_mask_item_changed)
 
         left = QVBoxLayout()
-        for w in (settings_btn, open_btn, segment_btn, self._plane, self._measure_btn,
+        for w in (settings_btn, open_btn, self._segment_btn, self._local_chk,
+                  self._plane, self._measure_btn,
                   clear_btn, png_btn, mask_btn, QLabel("Masks:"), self.mask_list,
                   self._status):
             left.addWidget(w)
@@ -168,8 +180,12 @@ class MainWindow(QMainWindow):
         cloud = CloudClient(config.server_url, config.token) if config.server_url else None
         self._c.set_cloud_client(cloud)
 
+    def _on_local_toggled(self, checked: bool) -> None:
+        self._c.set_local_mode(checked)
+        self._segment_btn.setText("Segment (local)" if checked else "Upload & Segment")
+
     def _on_segment(self) -> None:
-        if not self._config.server_url:
+        if not self._c.local and not self._config.server_url:
             QMessageBox.information(self, "No server", "Open Settings and set the server URL.")
             return
         if self._c.volume is None:
@@ -194,7 +210,8 @@ class MainWindow(QMainWindow):
         self._poll_timer.start()
 
     def _on_submit_failed(self, message: str) -> None:
-        QMessageBox.critical(self, "Cloud error", message)
+        title = "Segmentation error" if self._c.local else "Cloud error"
+        QMessageBox.critical(self, title, message)
         self.refresh()
 
     def _on_poll_tick(self) -> None:

@@ -41,17 +41,24 @@ class CloudClient:
         base_url: str,
         token: str | None,
         *,
-        timeout: float = 30.0,
+        timeout: float = 300.0,
+        connect_timeout: float = 15.0,
         retries: int = 2,
         sleep: Callable[[float], None] = time.sleep,
         client: httpx.Client | None = None,
     ) -> None:
         self._base = base_url.rstrip("/")
         self._headers = {"Authorization": f"Bearer {token}"} if token else {}
+        # Short connect timeout (fail fast when the server is unreachable),
+        # but a long read/write timeout so large study uploads over a remote
+        # tunnel are not cut off mid-transfer.
         self._timeout = timeout
+        self._connect_timeout = connect_timeout
         self._retries = retries
         self._sleep = sleep
-        self._client = client or httpx.Client(timeout=timeout)
+        self._client = client or httpx.Client(
+            timeout=httpx.Timeout(timeout, connect=connect_timeout, pool=connect_timeout)
+        )
 
     def _request(self, method: str, path: str, **kwargs) -> httpx.Response:
         url = f"{self._base}{path}"
@@ -82,7 +89,7 @@ class CloudClient:
 
     def check_connection(self) -> bool:
         try:
-            resp = self._client.get(f"{self._base}/healthz", timeout=self._timeout)
+            resp = self._client.get(f"{self._base}/healthz", timeout=self._connect_timeout)
         except httpx.HTTPError:
             return False
         return resp.status_code == 200 and resp.json().get("status") == "ok"

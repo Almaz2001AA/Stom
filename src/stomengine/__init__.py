@@ -6,7 +6,7 @@ server worker and the desktop client, so segmentation can run on the server or
 locally on the user's machine.
 """
 
-from .engine import InProcessEngine, LocalEngine
+from .engine import InProcessEngine, LocalEngine, SubprocessEngine
 from .labels import DENTALSEGMENTATOR_LABELS
 from .runner import (
     DentalSegmentatorRunner,
@@ -22,5 +22,6 @@ __all__ = [
     "InProcessEngine",
     "LocalEngine",
     "SegmentationRunner",
+    "SubprocessEngine",
     "harmonize_to_model_domain",
 ]

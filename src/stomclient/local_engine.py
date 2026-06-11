@@ -15,7 +15,25 @@ from pathlib import Path
 
 
 def build_local_engine(model_dir: str | None = None):
-    """Return a LocalEngine if a usable local model is configured, else None."""
+    """Return a LocalEngine for on-device segmentation, or None if unavailable.
+
+    Preference order:
+    1. A downloaded engine-pack (slim production client) -> ``SubprocessEngine``.
+    2. A from-source / server-side environment with weights + torch present ->
+       ``InProcessEngine``.
+    Otherwise ``None`` (local mode stays disabled until the pack is installed).
+    """
+    try:
+        from .engine_pack import find_engine_exe
+
+        exe = find_engine_exe()
+        if exe is not None:
+            from stomengine import SubprocessEngine
+
+            return SubprocessEngine(str(exe))
+    except Exception:  # noqa: BLE001 - fall through to in-process / disabled
+        pass
+
     model_dir = model_dir or os.environ.get("STOM_MODEL_DIR")
     if not model_dir or not Path(model_dir).is_dir():
         return None

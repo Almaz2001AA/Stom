@@ -98,6 +98,7 @@ class DentalSegmentatorRunner:
 
         import SimpleITK as sitk
         import torch
+        from nnunetv2.imageio.simpleitk_reader_writer import SimpleITKIO
         from nnunetv2.inference.predict_from_raw_data import nnUNetPredictor
 
         from stomcore.sitk_interop import geometry_from_sitk, sitk_from_volume
@@ -107,12 +108,9 @@ class DentalSegmentatorRunner:
         harmonized = Volume(harmonize_to_model_domain(volume.voxels), volume.geometry)
 
         with tempfile.TemporaryDirectory() as tmp:
-            in_dir = Path(tmp) / "in"
-            out_dir = Path(tmp) / "out"
-            in_dir.mkdir()
-            out_dir.mkdir()
-            # nnU-Net expects <case>_<channel:04d>.nii.gz
-            sitk.WriteImage(sitk_from_volume(harmonized), str(in_dir / "case_0000.nii.gz"),
+            in_path = Path(tmp) / "case_0000.nii.gz"
+            out_trunc = Path(tmp) / "case"
+            sitk.WriteImage(sitk_from_volume(harmonized), str(in_path),
                             useCompression=True)
 
             predictor = nnUNetPredictor(
@@ -125,10 +123,15 @@ class DentalSegmentatorRunner:
                 use_folds=(0,),  # DentalSegmentator v1.0.0 ships a single fold_0
                 checkpoint_name="checkpoint_final.pth",
             )
-            predictor.predict_from_files(
-                str(in_dir), str(out_dir),
-                save_probabilities=False, overwrite=True,
+            # Single-array, fully in-process inference. predict_from_files spawns
+            # multiprocessing.Pool workers; in the frozen Windows engine each
+            # worker re-execs the exe, which caused a freeze_support fork-bomb and
+            # — when launched from the windowed GUI — a console-control crash
+            # (exit 0xC000013A). predict_single_npy_array spawns no child process.
+            data, props = SimpleITKIO().read_images([str(in_path)])
+            predictor.predict_single_npy_array(
+                data, props, output_file_truncated=str(out_trunc)
             )
-            result = sitk.ReadImage(str(out_dir / "case.nii.gz"))
+            result = sitk.ReadImage(str(out_trunc) + ".nii.gz")
             labels = sitk.GetArrayFromImage(result).astype(np.uint16)
             return labels, geometry_from_sitk(result)

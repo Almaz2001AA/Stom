@@ -64,6 +64,23 @@ def test_subprocess_engine_raises_on_nonzero_exit():
         assert "boom: model not found" in str(exc)
 
 
+def test_subprocess_engine_decodes_windows_crash_code():
+    # No stderr, just a Windows NTSTATUS exit code -> decode it into a hint
+    # instead of surfacing an opaque number (0xC000013A = console-close kill).
+    def fake_run(cmd, env=None, capture_output=False, text=False, timeout=None):
+        return _Proc(3221225786, "preprocessing\npredicting\n", "")
+
+    engine = SubprocessEngine("stom-engine", run=fake_run)
+    try:
+        engine.segment(_volume())
+        raise AssertionError("expected RuntimeError")
+    except RuntimeError as exc:
+        msg = str(exc)
+        assert "0xC000013A" in msg          # the decoded code
+        assert "exit code 3221225786" in msg  # and the raw number
+        assert "output tail" in msg          # stdout surfaced when stderr is empty
+
+
 def test_subprocess_engine_raises_on_timeout():
     import subprocess
 

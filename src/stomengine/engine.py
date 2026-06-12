@@ -23,6 +23,22 @@ from stomcore.volume import Volume
 from .labels import DENTALSEGMENTATOR_LABELS
 from .runner import SegmentationRunner
 
+# Windows: run the console engine without a window so it is not tied to the GUI's
+# transient console (whose teardown delivers a CTRL_CLOSE to any child process —
+# the cause of exit 0xC000013A) and so no console flashes during inference.
+_CREATE_NO_WINDOW = 0x08000000
+
+# Friendly hints for Windows NTSTATUS exit codes the engine can surface with no
+# stderr of its own, so an opaque number becomes an actionable message.
+_WIN_EXIT_HINTS = {
+    3221225786: "the engine was terminated by a console-close/Ctrl+C event "
+                "(0xC000013A) — typically a multiprocessing/console issue",
+    3221225477: "memory access violation (0xC0000005) — possible out-of-memory "
+                "on a large volume",
+    3221225781: "a required DLL was not found (0xC0000135) — the engine-pack may "
+                "be incomplete; reinstall/update the engine",
+}
+
 
 class LocalEngine(Protocol):
     def segment(self, volume: Volume) -> SegmentationMask:
@@ -48,6 +64,25 @@ class InProcessEngine:
                 "predicted mask shape/geometry does not match input volume"
             )
         return mask
+
+
+def _failure_detail(proc) -> str:
+    """Build the most informative message available from a failed engine run.
+
+    Prefers the engine's own stderr; otherwise falls back to stdout, then to a
+    decoded exit code with a hint for known Windows crash codes.
+    """
+    stderr = (proc.stderr or "").strip()
+    if stderr:
+        return stderr
+    code = proc.returncode
+    parts = [f"exit code {code}"]
+    if code in _WIN_EXIT_HINTS:
+        parts.append(_WIN_EXIT_HINTS[code])
+    stdout = (proc.stdout or "").strip()
+    if stdout:
+        parts.append(f"output tail: {stdout[-500:]}")
+    return " — ".join(parts)
 
 
 class SubprocessEngine:
@@ -86,6 +121,10 @@ class SubprocessEngine:
             if self._model_dir:
                 env["STOM_MODEL_DIR"] = self._model_dir
 
+            kwargs = {}
+            if os.name == "nt":
+                kwargs["creationflags"] = _CREATE_NO_WINDOW
+
             try:
                 proc = self._run(
                     [*self._cmd, "predict", str(in_path), str(out_dir)],
@@ -93,14 +132,14 @@ class SubprocessEngine:
                     capture_output=True,
                     text=True,
                     timeout=self._timeout,
+                    **kwargs,
                 )
             except subprocess.TimeoutExpired as exc:
                 raise RuntimeError(
                     f"local engine timed out after {self._timeout}s"
                 ) from exc
             if proc.returncode != 0:
-                detail = (proc.stderr or "").strip() or f"exit code {proc.returncode}"
-                raise RuntimeError(f"local engine failed: {detail}")
+                raise RuntimeError(f"local engine failed: {_failure_detail(proc)}")
 
             mask = load_mask_nifti(out_dir / "mask.nii.gz", out_dir / "mask_labels.json")
 

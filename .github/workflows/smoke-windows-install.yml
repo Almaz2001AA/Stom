@@ -21,6 +21,8 @@ on:
 jobs:
   smoke:
     runs-on: windows-latest
+    # A wedged engine must fail fast, not burn the default 6h job timeout.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 

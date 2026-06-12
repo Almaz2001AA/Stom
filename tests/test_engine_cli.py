@@ -41,7 +41,7 @@ def test_resolve_model_dir_honors_env(monkeypatch):
 def test_subprocess_engine_reads_back_mask(tmp_path):
     """Fake `run` segments with FakeRunner, writing into the out dir from argv."""
 
-    def fake_run(cmd, env=None, capture_output=False, text=False):
+    def fake_run(cmd, env=None, capture_output=False, text=False, timeout=None):
         # cmd == [*prefix, "predict", in_path, out_dir]
         in_path, out_dir = cmd[-2], cmd[-1]
         run_predict(in_path, out_dir, InProcessEngine(FakeRunner()))
@@ -53,7 +53,7 @@ def test_subprocess_engine_reads_back_mask(tmp_path):
 
 
 def test_subprocess_engine_raises_on_nonzero_exit():
-    def fake_run(cmd, env=None, capture_output=False, text=False):
+    def fake_run(cmd, env=None, capture_output=False, text=False, timeout=None):
         return _Proc(1, "", "boom: model not found")
 
     engine = SubprocessEngine("stom-engine", run=fake_run)
@@ -64,10 +64,24 @@ def test_subprocess_engine_raises_on_nonzero_exit():
         assert "boom: model not found" in str(exc)
 
 
+def test_subprocess_engine_raises_on_timeout():
+    import subprocess
+
+    def fake_run(cmd, env=None, capture_output=False, text=False, timeout=None):
+        raise subprocess.TimeoutExpired(cmd, timeout)
+
+    engine = SubprocessEngine("stom-engine", timeout=5, run=fake_run)
+    try:
+        engine.segment(_volume())
+        raise AssertionError("expected RuntimeError")
+    except RuntimeError as exc:
+        assert "timed out after 5s" in str(exc)
+
+
 def test_subprocess_engine_passes_model_dir(tmp_path):
     seen = {}
 
-    def fake_run(cmd, env=None, capture_output=False, text=False):
+    def fake_run(cmd, env=None, capture_output=False, text=False, timeout=None):
         seen["model_dir"] = (env or {}).get("STOM_MODEL_DIR")
         run_predict(cmd[-2], cmd[-1], InProcessEngine(FakeRunner()))
         return _Proc(0, "", "")

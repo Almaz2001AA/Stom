@@ -41,7 +41,9 @@ def main() -> int:
     vol = Volume(np.zeros((32, 32, 32), dtype=np.int16), geo)
 
     print("4/4 running inference via SubprocessEngine (TTA off) ...")
-    engine = SubprocessEngine(str(exe))
+    # 32^3 with TTA off is seconds of work; a longer wait means the engine wedged
+    # (e.g. a frozen-multiprocessing fork bomb). Fail loudly inside the job budget.
+    engine = SubprocessEngine(str(exe), timeout=1200)
     mask = engine.segment(vol)
 
     assert mask.is_compatible_with(vol), "mask geometry incompatible with input"

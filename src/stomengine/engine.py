@@ -64,11 +64,15 @@ class SubprocessEngine:
         exe: str | os.PathLike | list[str],
         *,
         model_dir: str | None = None,
+        timeout: float | None = None,
         run=subprocess.run,
     ) -> None:
         # Accept a bare path or a full argv prefix (e.g. ["python", "-m", ...]).
         self._cmd = [str(exe)] if isinstance(exe, (str, os.PathLike)) else list(exe)
         self._model_dir = model_dir
+        # Cap inference wall-time so a wedged engine surfaces as an error instead
+        # of hanging the caller forever (None = wait indefinitely).
+        self._timeout = timeout
         self._run = run
 
     def segment(self, volume: Volume) -> SegmentationMask:
@@ -82,12 +86,18 @@ class SubprocessEngine:
             if self._model_dir:
                 env["STOM_MODEL_DIR"] = self._model_dir
 
-            proc = self._run(
-                [*self._cmd, "predict", str(in_path), str(out_dir)],
-                env=env,
-                capture_output=True,
-                text=True,
-            )
+            try:
+                proc = self._run(
+                    [*self._cmd, "predict", str(in_path), str(out_dir)],
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=self._timeout,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise RuntimeError(
+                    f"local engine timed out after {self._timeout}s"
+                ) from exc
             if proc.returncode != 0:
                 detail = (proc.stderr or "").strip() or f"exit code {proc.returncode}"
                 raise RuntimeError(f"local engine failed: {detail}")

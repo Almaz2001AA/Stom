@@ -133,8 +133,10 @@ class FakeEngine:
         self._boom = boom
         self.called = False
 
-    def segment(self, volume):
+    def segment(self, volume, *, progress=None):
         self.called = True
+        if progress is not None:
+            progress(2, 4)
         if self._boom is not None:
             raise self._boom
         return self._mask
@@ -159,6 +161,18 @@ def test_local_mode_submit_produces_mask_without_cloud():
     assert c.state == State.MASK_READY
     assert c.mask is not None
     assert c.poll() is True                  # already terminal
+
+
+def test_local_mode_submit_forwards_progress():
+    geo = Geometry.identity((0.3, 0.3, 0.3))
+    engine = FakeEngine(mask=_mask(geo))
+    c = AppController(FakeCloud([]), engine=engine)
+    c.load_volume(_volume(geo))
+    c.set_local_mode(True)
+    seen = []
+    c.submit(progress=lambda d, t: seen.append((d, t)))
+    assert seen == [(2, 4)]
+    assert c.state == State.MASK_READY
 
 
 def test_local_mode_failure_sets_failed_and_reraises():

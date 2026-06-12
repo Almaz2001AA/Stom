@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Protocol
 
 import numpy as np
@@ -12,6 +13,10 @@ from stomcore.geometry import Geometry
 from stomcore.volume import Volume
 
 _TTA_DISABLE_VALUES = {"1", "true", "yes", "on"}
+
+# A progress callback receives (steps_done, steps_total) for the sliding-window
+# tile loop — the long part of CPU inference — so the UI can show a percentage.
+ProgressCb = Callable[[int, int], None]
 
 
 def tta_enabled(env: Mapping[str, str] | None = None) -> bool:
@@ -56,13 +61,16 @@ def harmonize_to_model_domain(
 
 
 class SegmentationRunner(Protocol):
-    def predict(self, volume: Volume) -> tuple[np.ndarray, Geometry]:
+    def predict(
+        self, volume: Volume, *, progress: ProgressCb | None = None
+    ) -> tuple[np.ndarray, Geometry]:
         """Return ``(labels, geometry)`` for the prediction.
 
         ``labels`` is a [z, y, x] label volume; ``geometry`` is the spatial
         geometry of that prediction. The caller verifies it is compatible with
         the input volume, so a runner that silently alters shape/spacing/origin
-        is detected rather than trusted.
+        is detected rather than trusted. ``progress``, if given, is called with
+        ``(steps_done, steps_total)`` as inference advances.
         """
         ...
 
@@ -70,12 +78,86 @@ class SegmentationRunner(Protocol):
 class FakeRunner:
     """Deterministic stand-in: labels a few fixed voxels. No model needed."""
 
-    def predict(self, volume: Volume) -> tuple[np.ndarray, Geometry]:
+    def predict(
+        self, volume: Volume, *, progress: ProgressCb | None = None
+    ) -> tuple[np.ndarray, Geometry]:
+        if progress is not None:
+            progress(1, 1)  # exercise the progress wiring end to end
         labels = np.zeros(volume.shape, dtype=np.uint16)
         flat = labels.reshape(-1)
         for i in range(min(5, flat.size)):
             flat[i] = i + 1
         return labels, volume.geometry
+
+
+def _tile_progress(progress: ProgressCb | None):
+    """Route nnU-Net's sliding-window tile loop to ``progress``.
+
+    nnU-Net renders tile progress with a ``tqdm`` bar (``tqdm(total=n_tiles)``
+    then ``pbar.update()`` per tile). We temporarily swap the ``tqdm`` symbol in
+    its inference module for a tiny counter that forwards ``(done, total)`` to
+    ``progress`` — no fork, no version-specific subclassing. A no-op when
+    ``progress`` is None.
+    """
+    if progress is None:
+        return contextlib.nullcontext()
+
+    class _Bar:
+        def __init__(self, iterable=None, *, total=None, **_kwargs):
+            self._iterable = iterable
+            if total is None and iterable is not None:
+                try:
+                    total = len(iterable)
+                except TypeError:
+                    total = None
+            self.total = total
+            self.n = 0
+            self._report()
+
+        def _report(self):
+            if self.total:
+                with contextlib.suppress(Exception):
+                    progress(min(self.n, self.total), self.total)
+
+        def update(self, n=1):
+            self.n += n
+            self._report()
+
+        def __iter__(self):
+            for obj in self._iterable:
+                yield obj
+                self.update(1)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+        def set_postfix(self, *_a, **_k):
+            pass
+
+        def set_description(self, *_a, **_k):
+            pass
+
+        def refresh(self):
+            pass
+
+        def close(self):
+            pass
+
+    @contextlib.contextmanager
+    def _ctx():
+        from nnunetv2.inference import predict_from_raw_data as _pr
+
+        original = _pr.tqdm
+        _pr.tqdm = _Bar
+        try:
+            yield
+        finally:
+            _pr.tqdm = original
+
+    return _ctx()
 
 
 class DentalSegmentatorRunner:
@@ -92,7 +174,9 @@ class DentalSegmentatorRunner:
         # an explicit choice is passed.
         self._use_tta = tta_enabled() if use_tta is None else use_tta
 
-    def predict(self, volume: Volume) -> tuple[np.ndarray, Geometry]:
+    def predict(
+        self, volume: Volume, *, progress: ProgressCb | None = None
+    ) -> tuple[np.ndarray, Geometry]:
         import tempfile
         from pathlib import Path
 
@@ -129,9 +213,10 @@ class DentalSegmentatorRunner:
             # — when launched from the windowed GUI — a console-control crash
             # (exit 0xC000013A). predict_single_npy_array spawns no child process.
             data, props = SimpleITKIO().read_images([str(in_path)])
-            predictor.predict_single_npy_array(
-                data, props, output_file_truncated=str(out_trunc)
-            )
+            with _tile_progress(progress):
+                predictor.predict_single_npy_array(
+                    data, props, output_file_truncated=str(out_trunc)
+                )
             result = sitk.ReadImage(str(out_trunc) + ".nii.gz")
             labels = sitk.GetArrayFromImage(result).astype(np.uint16)
             return labels, geometry_from_sitk(result)

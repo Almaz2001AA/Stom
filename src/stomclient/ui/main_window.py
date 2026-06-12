@@ -38,6 +38,7 @@ class _SubmitWorker(QObject):
     """Runs the blocking submit() off the UI thread."""
     done = Signal()
     failed = Signal(str)
+    progress = Signal(int, int)  # (steps_done, steps_total)
 
     def __init__(self, controller: AppController) -> None:
         super().__init__()
@@ -45,7 +46,9 @@ class _SubmitWorker(QObject):
 
     def run(self) -> None:
         try:
-            self._c.submit()
+            # The callback fires on this worker thread; emitting a queued signal
+            # marshals the update to the UI thread.
+            self._c.submit(progress=lambda done, total: self.progress.emit(done, total))
             self.done.emit()
         except Exception as exc:  # noqa: BLE001
             self.failed.emit(str(exc))
@@ -470,6 +473,7 @@ class MainWindow(QMainWindow):
         worker = _SubmitWorker(self._c)
         worker.moveToThread(self._thread)
         self._thread.started.connect(worker.run)
+        worker.progress.connect(self._on_seg_progress)
         worker.done.connect(self._on_submitted)
         worker.failed.connect(self._on_submit_failed)
         worker.done.connect(self._thread.quit)
@@ -477,6 +481,12 @@ class MainWindow(QMainWindow):
         self._worker = worker
         self._thread.start()
         self.refresh()
+
+    def _on_seg_progress(self, done: int, total: int) -> None:
+        """Show live inference progress as a percentage in the status label."""
+        if total > 0:
+            pct = min(100, done * 100 // total)
+            self._status.setText(S.STATUS_SEG_PROGRESS.format(pct=pct))
 
     def _on_submitted(self) -> None:
         self.refresh()

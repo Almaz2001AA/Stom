@@ -120,12 +120,12 @@ class AppController:
         self.local = enabled
         self._changed()
 
-    def submit(self) -> None:
+    def submit(self, *, progress: Callable[[int, int], None] | None = None) -> None:
         if self.state not in (State.LOADED, State.FAILED, State.MASK_READY):
             raise RuntimeError(f"cannot submit from state {self.state}")
         self.error = None
         if self.local:
-            self._submit_local()
+            self._submit_local(progress)
         else:
             self._submit_cloud()
 
@@ -146,18 +146,25 @@ class AppController:
         self.state = State.SEGMENTING
         self._changed()
 
-    def _submit_local(self) -> None:
+    def _submit_local(
+        self, progress: Callable[[int, int], None] | None = None
+    ) -> None:
         """Run segmentation on-device. Blocking; callers run it off the UI thread.
 
         Goes straight to MASK_READY (no upload/poll) since the engine produces
-        the mask synchronously. Any failure leaves a retryable FAILED state.
+        the mask synchronously. ``progress`` (if given) reports inference
+        ``(done, total)`` steps. Any failure leaves a retryable FAILED state.
         """
         if self._engine is None:
             raise RuntimeError("local segmentation engine not available")
         self.state = State.SEGMENTING
         self._changed()
         try:
-            mask = self._engine.segment(self.volume)
+            mask = (
+                self._engine.segment(self.volume)
+                if progress is None
+                else self._engine.segment(self.volume, progress=progress)
+            )
         except Exception as exc:  # noqa: BLE001 - any failure must leave a retryable FAILED state
             self.state = State.FAILED
             self.error = str(exc)

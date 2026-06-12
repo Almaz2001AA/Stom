@@ -9,9 +9,12 @@ torch/nnunet — both satisfy the same ``LocalEngine`` protocol.
 
 from __future__ import annotations
 
+import contextlib
 import os
+import re
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
 from typing import Protocol
 
@@ -21,12 +24,17 @@ from stomcore.nifti_io import save_volume_nifti
 from stomcore.volume import Volume
 
 from .labels import DENTALSEGMENTATOR_LABELS
-from .runner import SegmentationRunner
+from .runner import ProgressCb, SegmentationRunner
 
 # Windows: run the console engine without a window so it is not tied to the GUI's
 # transient console (whose teardown delivers a CTRL_CLOSE to any child process —
 # the cause of exit 0xC000013A) and so no console flashes during inference.
 _CREATE_NO_WINDOW = 0x08000000
+
+# The engine-pack subprocess prints one of these per tile so the parent can show
+# a live percentage (see stomengine.cli). Parsed out of stdout; other lines are
+# kept for error reporting.
+_PROGRESS_RE = re.compile(r"^PROGRESS\s+(\d+)\s+(\d+)\s*$")
 
 # Friendly hints for Windows NTSTATUS exit codes the engine can surface with no
 # stderr of its own, so an opaque number becomes an actionable message.
@@ -41,11 +49,14 @@ _WIN_EXIT_HINTS = {
 
 
 class LocalEngine(Protocol):
-    def segment(self, volume: Volume) -> SegmentationMask:
+    def segment(
+        self, volume: Volume, *, progress: ProgressCb | None = None
+    ) -> SegmentationMask:
         """Return a :class:`SegmentationMask` for ``volume``.
 
         Implementations must return a mask whose geometry matches ``volume``;
-        the caller is expected to verify this and reject a mismatch.
+        the caller is expected to verify this and reject a mismatch. ``progress``,
+        if given, is called with ``(steps_done, steps_total)`` as inference runs.
         """
         ...
 
@@ -56,14 +67,61 @@ class InProcessEngine:
     def __init__(self, runner: SegmentationRunner) -> None:
         self._runner = runner
 
-    def segment(self, volume: Volume) -> SegmentationMask:
-        labels, geometry = self._runner.predict(volume)
+    def segment(
+        self, volume: Volume, *, progress: ProgressCb | None = None
+    ) -> SegmentationMask:
+        # Forward progress only when asked, so simpler runners (test doubles)
+        # that take just ``volume`` keep working.
+        if progress is None:
+            labels, geometry = self._runner.predict(volume)
+        else:
+            labels, geometry = self._runner.predict(volume, progress=progress)
         mask = SegmentationMask(labels, geometry, DENTALSEGMENTATOR_LABELS)
         if not mask.is_compatible_with(volume):
             raise ValueError(
                 "predicted mask shape/geometry does not match input volume"
             )
         return mask
+
+
+def _stream_engine(cmd, *, env, timeout, on_progress=None, creationflags=0):
+    """Run the engine binary, streaming stdout so progress is live.
+
+    ``subprocess.run(capture_output=True)`` blocks until the process exits, so
+    the parent learns nothing until inference is done. We instead drain the
+    child's output on a thread, forwarding ``PROGRESS <done> <total>`` lines to
+    ``on_progress`` and keeping the rest for error reporting. stderr is merged
+    into stdout so a single reader cannot deadlock on a full pipe. Returns a
+    :class:`subprocess.CompletedProcess`; raises ``TimeoutExpired`` past
+    ``timeout`` after killing the child.
+    """
+    proc = subprocess.Popen(
+        cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, bufsize=1, creationflags=creationflags,
+    )
+    captured: list[str] = []
+
+    def _drain() -> None:
+        for line in proc.stdout:  # type: ignore[union-attr]
+            match = _PROGRESS_RE.match(line.strip())
+            if match and on_progress is not None:
+                with contextlib.suppress(Exception):
+                    on_progress(int(match.group(1)), int(match.group(2)))
+            else:
+                captured.append(line)
+
+    reader = threading.Thread(target=_drain, daemon=True)
+    reader.start()
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        raise
+    reader.join(timeout=5)
+    return subprocess.CompletedProcess(
+        cmd, proc.returncode, stdout="".join(captured), stderr=""
+    )
 
 
 def _failure_detail(proc) -> str:
@@ -100,7 +158,7 @@ class SubprocessEngine:
         *,
         model_dir: str | None = None,
         timeout: float | None = None,
-        run=subprocess.run,
+        run=_stream_engine,
     ) -> None:
         # Accept a bare path or a full argv prefix (e.g. ["python", "-m", ...]).
         self._cmd = [str(exe)] if isinstance(exe, (str, os.PathLike)) else list(exe)
@@ -110,7 +168,9 @@ class SubprocessEngine:
         self._timeout = timeout
         self._run = run
 
-    def segment(self, volume: Volume) -> SegmentationMask:
+    def segment(
+        self, volume: Volume, *, progress: ProgressCb | None = None
+    ) -> SegmentationMask:
         with tempfile.TemporaryDirectory() as tmp:
             in_path = Path(tmp) / "input.nii.gz"
             out_dir = Path(tmp) / "out"
@@ -121,18 +181,15 @@ class SubprocessEngine:
             if self._model_dir:
                 env["STOM_MODEL_DIR"] = self._model_dir
 
-            kwargs = {}
-            if os.name == "nt":
-                kwargs["creationflags"] = _CREATE_NO_WINDOW
+            creationflags = _CREATE_NO_WINDOW if os.name == "nt" else 0
 
             try:
                 proc = self._run(
                     [*self._cmd, "predict", str(in_path), str(out_dir)],
                     env=env,
-                    capture_output=True,
-                    text=True,
                     timeout=self._timeout,
-                    **kwargs,
+                    on_progress=progress,
+                    creationflags=creationflags,
                 )
             except subprocess.TimeoutExpired as exc:
                 raise RuntimeError(

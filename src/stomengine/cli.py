@@ -50,10 +50,28 @@ def _build_engine():
     return InProcessEngine(DentalSegmentatorRunner(resolve_model_dir()))
 
 
-def run_predict(input_path: str | os.PathLike, output_dir: str | os.PathLike, engine) -> None:
+def _emit_progress(done: int, total: int) -> None:
+    """Print one machine-readable progress line for the parent to parse.
+
+    ``SubprocessEngine`` streams our stdout and turns ``PROGRESS <done> <total>``
+    into a live percentage in the GUI. Flush so it arrives tile-by-tile, not in
+    one buffered dump at exit.
+    """
+    print(f"PROGRESS {done} {total}", flush=True)
+
+
+def run_predict(
+    input_path: str | os.PathLike,
+    output_dir: str | os.PathLike,
+    engine,
+    *,
+    progress=None,
+) -> None:
     """Testable core: load volume, segment, write mask + labels to output_dir."""
     volume = load_volume_nifti(input_path)
-    mask = engine.segment(volume)
+    mask = engine.segment(volume) if progress is None else engine.segment(
+        volume, progress=progress
+    )
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
     save_mask_nifti(mask, out / "mask.nii.gz", out / "mask_labels.json")
@@ -69,7 +87,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "predict":
         try:
-            run_predict(args.input, args.output_dir, _build_engine())
+            run_predict(
+                args.input, args.output_dir, _build_engine(), progress=_emit_progress
+            )
         except Exception as exc:  # noqa: BLE001 - report to caller via stderr/exit code
             print(f"stom-engine: {exc}", file=sys.stderr)
             return 1

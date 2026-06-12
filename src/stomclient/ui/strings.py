@@ -55,10 +55,14 @@ STATUS = {
     State.EMPTY: "Нет исследования",
     State.LOADED: "Исследование загружено",
     State.UPLOADING: "Загрузка на сервер…",
-    State.SEGMENTING: "Сегментация…",
+    State.SEGMENTING: "Сегментация… (идёт расчёт)",
     State.MASK_READY: "Готово — маска получена",
     State.FAILED: "Ошибка",
 }
+
+# Live segmentation progress shown in place of the SEGMENTING status while
+# inference runs (percentage of the sliding-window tiles done).
+STATUS_SEG_PROGRESS = "Сегментация… {pct}%"
 
 # Dialog titles and messages.
 MSG = {

@@ -1,7 +1,31 @@
 # Где я остановился — продолжить отсюда
 
-**Последнее обновление:** 2026-06-11 (вечер). Всё закоммичено и запушено в `origin/master`.
-Ветка: `master` (HEAD `9f8daef`). Локальная ветка `feat/local-segmentation` уже влита (PR #1).
+**Последнее обновление:** 2026-06-12 (утро). Всё закоммичено и запушено в `origin/master`.
+Ветка: `master` (HEAD `83d4a2f`). Локальная ветка `feat/local-segmentation` уже влита (PR #1).
+
+## ✅ ХВОСТ ЗАКРЫТ — smoke-тест зелёный на v0.1.4
+Прошлый smoke (run `27345327941`, против v0.1.2/engine-pack v0.1.3) **завис на 6 ч** и был
+отменён по дефолтному job-таймауту. Причина: engine-pack бинарь форк-бомбил сам себя —
+`packaging/engine_launch.py` (frozen-точка входа) НЕ звал `multiprocessing.freeze_support()`,
+а `nnUNetPredictor.predict_from_files` плодит `multiprocessing.Pool`. В one-folder PyInstaller
+каждый воркер ре-exec'ит `stom-engine.exe` → снова `main()` → снова `predict` → ещё воркеры,
+до бесконечности. Даже 32³ висел вечно.
+
+**Фикс (коммит `83d4a2f`, выпущен в v0.1.4):**
+- `packaging/engine_launch.py`: `multiprocessing.freeze_support()` первым делом в `__main__` — это и есть фикс.
+- `stomengine.SubprocessEngine(timeout=)`: зависший движок теперь кидает `RuntimeError`, а не висит.
+- smoke-workflow: `timeout-minutes: 45`; smoke-скрипт зовёт движок с `timeout=1200`.
+- bump `0.1.3 → 0.1.4` (engine-pack обязательно пере-собрать+пере-выложить, чтобы фикс уехал).
+- тесты: фейковые `run()` принимают `timeout`; добавлен тест таймаута → **156 passed**.
+
+**Результат:** обе сборки v0.1.4 зелёные, smoke (run `27400087507`, `tag=v0.1.4`) — `success`
+за ~2 мин: manifest→download+verify+extract engine-pack→реальный инференс через
+`SubprocessEngine` → `SMOKE TEST PASSED` (mask 32³, TTA off). **Релиз v0.1.4 доведён.**
+
+**v0.1.4 — актуальный релиз:** https://github.com/Almaz2001AA/Stom/releases/tag/v0.1.4
+(`StomClientSetup.exe` 183 МБ, `stom-engine-pack-win64.zip` 525 МБ, `engine-pack-manifest.json`;
+манифест `releases/latest/download/` резолвится в v0.1.4). **v0.1.2/v0.1.3 НЕ использовать** —
+их engine-pack без freeze_support, инференс зависает.
 
 ## Что сделал сегодня — ЛОКАЛЬНАЯ (on-device) СЕГМЕНТАЦИЯ, выпущена в v0.1.3
 Причина фичи: большие CBCT-аплоады рвались через любой туннель → перенесли инференс на ПК
@@ -19,32 +43,20 @@
   чекбокс активируется. **155 тестов зелёные.**
 
 **Релизы (CI обе сборки зелёные, артефакты в Releases):**
-- `v0.1.2` — первый engine-pack релиз (БЕЗ кнопки, не использовать).
-- `v0.1.3` — **актуальный**: https://github.com/Almaz2001AA/Stom/releases/tag/v0.1.3
+- `v0.1.2`/`v0.1.3` — **НЕ использовать**: engine-pack без `freeze_support()`, инференс зависает.
+- `v0.1.4` — **актуальный**: https://github.com/Almaz2001AA/Stom/releases/tag/v0.1.4
   - `StomClientSetup.exe` (183 МБ, слим-GUI с кнопкой)
-  - `stom-engine-pack-win64.zip` (524 МБ, torch CPU+nnU-Net+веса) + `engine-pack-manifest.json`
-  - Манифест по `releases/latest/download/` резолвится в v0.1.3 (клиент тянет его сам).
+  - `stom-engine-pack-win64.zip` (525 МБ, torch CPU+nnU-Net+веса) + `engine-pack-manifest.json`
+  - Манифест по `releases/latest/download/` резолвится в v0.1.4 (клиент тянет его сам).
+  - Smoke-тест на чистой Windows VM пройден (run `27400087507`).
 - Repo variable `WEIGHTS_URL` = Zenodo (`zenodo.org/records/10829675/.../Dataset112_DentalSegmentator_v100.zip?download=1`).
 - Теги v0.1.0/v0.1.1 заняты старыми коммитами (предшествуют workflow).
 
-## НЕЗАКРЫТЫЙ ХВОСТ — дождаться smoke-теста на Windows
-CI smoke-тест на чистой `windows-latest` (`.github/workflows/smoke-windows-install.yml` +
-`.github/scripts/smoke_engine_pack.py`): скачать+тихо поставить `StomClientSetup.exe`, затем
-реальный first-run (манифест → download+verify+extract engine-pack → `SubprocessEngine` инференс).
-- **Run id `27345327941`** (запущен против tag v0.1.2; engine-pack тянет latest = v0.1.3).
-- На вечер 11.06 статус: тихая установка ✅; шаг «engine-pack + inference» висел **`in_progress` >40 мин**
-  (подозрительно долго для 32³ с TTA-off → возможно медленная загрузка 524 МБ / зависание).
-- **Завтра первым делом** проверить итог:
-  ```bash
-  TOKEN=$(grep -o '://[^:]*:[^@]*@github.com' ~/.git-credentials | head -1 | sed 's#://[^:]*:##; s#@github.com##')
-  curl -s -H "Authorization: token $TOKEN" https://api.github.com/repos/Almaz2001AA/Stom/actions/runs/27345327941/jobs \
-    | jq -r '.jobs[].steps[] | "\(.status)\t\(.conclusion//"-")\t\(.name)"'
-  ```
-  Если упал/завис — скачать логи шага и разобрать; при необходимости перезапустить
-  `workflow_dispatch` (workflow id `293836682`, input `tag=v0.1.3`). Фоновый поллинг прошлой
-  сессии (`btx6oysp9`) до завтра НЕ доживёт.
+Smoke-тест (`.github/workflows/smoke-windows-install.yml` + `.github/scripts/smoke_engine_pack.py`)
+перезапускается через `workflow_dispatch` с input `tag` (напр. `tag=v0.1.4`); теперь с
+`timeout-minutes: 45` на job и `timeout=1200` на инференс — зависание падает быстро, а не за 6 ч.
 
-## Установка у конечного пользователя (v0.1.3)
+## Установка у конечного пользователя (v0.1.4)
 1. Поставить `StomClientSetup.exe` (SmartScreen → «Подробнее → Выполнить в любом случае»).
 2. В приложении нажать **«Install local engine…»** (один раз, ~0.5 ГБ → `%LOCALAPPDATA%\Stom\engine`).
 3. Галка **«Local (on-device)»** активируется → работа локально, без сервера/токена.
@@ -74,7 +86,7 @@ CI smoke-тест на чистой `windows-latest` (`.github/workflows/smoke-w
   Проверка: `curl -s http://localhost:8010/healthz` → `{"status":"ok"}`.
 
 ## Полезные пути и факты
-- Тесты: `.venv/bin/python -m pytest -q` → **155 passed**. Python только в `.venv` (нет системного `python`).
+- Тесты: `.venv/bin/python -m pytest -q` → **156 passed**. Python только в `.venv` (нет системного `python`).
 - `gh` CLI НЕ установлен → PR/releases/variables/dispatch делаю через GitHub API + токен из `~/.git-credentials`.
 - Веса: `models/Dataset112_DentalSegmentator_v100/nnUNetTrainer__nnUNetPlans__3d_fullres`. GPU нет → CPU.
 - Тестовый реальный CBCT: `/opt/almaz/test/Stom/20241021-...ГалееваЛяйсан...CT...` (100×700×700, 0.2мм).
@@ -82,10 +94,12 @@ CI smoke-тест на чистой `windows-latest` (`.github/workflows/smoke-w
 - Память Клода: `stom-project-roadmap`, `dentalsegmentator-intensity-harmonization` — подтянутся сами.
 
 ## Открытые follow-ups
-- Дождаться/починить Windows smoke-тест (см. выше) — главный незакрытый пункт.
+- ✅ Windows smoke-тест — закрыт (v0.1.4 зелёный, см. выше).
 - RAM целевого ПК (~6–8 ГБ на объём 100×700×700) не подтверждён на реальном железе.
+- Реальный инференс на полном CBCT (100×700×700) через выпущенный engine-pack v0.1.4 на
+  Windows ещё не гоняли — smoke проверил только синтетику 32³. Стоит проверить на железе юзера.
 - Прочие отложенные — в `docs/superpowers/plans/FOLLOWUPS-*.md`.
 
 ## Как продолжить
-Открыть Claude Code в `/opt/almaz/test/Stom`, `claude --continue`, сказать:
-«проверь итог smoke-теста (run 27345327941) по CONTINUE-HERE и доведём релиз v0.1.3».
+Релиз v0.1.4 доведён и проверен. Дальше — по follow-ups (реальный CBCT на железе юзера) или
+новые задачи. Открыть Claude Code в `/opt/almaz/test/Stom`, `claude --continue`.

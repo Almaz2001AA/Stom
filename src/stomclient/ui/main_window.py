@@ -358,12 +358,17 @@ class MainWindow(QMainWindow):
         self._install_progress.setMinimumDuration(0)
         self._install_progress.setValue(0)
 
+        # Remembered so the (UI-thread) done handler knows install vs update.
+        # Must NOT ride on a context-less lambda: connecting ``done`` to a bare
+        # lambda would run the slot in the *worker* thread, and creating the
+        # success QMessageBox there yields a blank, frozen "(Не отвечает)" window.
+        self._installing_clean = clean
         self._install_thread = QThread(self)
         worker = _InstallWorker(_provision)
         worker.moveToThread(self._install_thread)
         self._install_thread.started.connect(worker.run)
         worker.progress.connect(self._on_install_progress)
-        worker.done.connect(lambda eng: self._on_install_done(eng, updated=clean))
+        worker.done.connect(self._on_install_done)
         worker.failed.connect(self._on_install_failed)
         worker.done.connect(self._install_thread.quit)
         worker.failed.connect(self._install_thread.quit)
@@ -378,7 +383,11 @@ class MainWindow(QMainWindow):
         if total > 0:
             self._install_progress.setValue(min(100, done * 100 // total))
 
-    def _on_install_done(self, engine: object, *, updated: bool = False) -> None:
+    def _on_install_done(self, engine: object, *, updated: bool | None = None) -> None:
+        # ``updated`` arrives explicitly from tests; from the worker signal it is
+        # None, so fall back to the flag stashed by _start_engine_install.
+        if updated is None:
+            updated = getattr(self, "_installing_clean", False)
         if self._install_progress is not None:
             self._install_progress.reset()
         self._install_btn.setEnabled(True)
@@ -422,12 +431,18 @@ class MainWindow(QMainWindow):
         thread.started.connect(worker.run)
         worker.done.connect(slot)
         worker.done.connect(thread.quit)
-        # Keep references alive until the thread finishes.
-        thread.finished.connect(lambda t=thread: self._check_threads.remove(t)
-                                if t in self._check_threads else None)
+        # Keep references alive until the thread finishes. Use a bound method
+        # (not a context-less lambda) so the cleanup is marshalled to the UI
+        # thread rather than run in the worker thread that emits ``finished``.
+        thread.finished.connect(self._on_check_thread_finished)
         self._check_threads.append(thread)
         self._check_worker = worker
         thread.start()
+
+    def _on_check_thread_finished(self) -> None:
+        thread = self.sender()
+        if thread in self._check_threads:
+            self._check_threads.remove(thread)
 
     def _on_engine_update_checked(self, available: object) -> None:
         if not available:

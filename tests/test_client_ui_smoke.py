@@ -138,6 +138,35 @@ def test_install_button_offered_then_enables_local(qapp, monkeypatch):
     assert controller.local is True                # auto-selected local mode
 
 
+def test_install_done_uses_stored_clean_flag(qapp, monkeypatch):
+    """The worker's ``done`` signal calls ``_on_install_done(engine)`` with no
+    ``updated`` kwarg, so the handler must read the install-vs-update mode from
+    the flag stashed by ``_start_engine_install`` — not default to install.
+
+    This guards the fix that replaced a context-less ``lambda`` (which ran the
+    slot, and built its QMessageBox, in the worker thread → blank frozen window)
+    with a bound-method connection that marshals to the UI thread.
+    """
+    from stomclient.ui import strings as S
+    from stomclient.ui.main_window import MainWindow
+
+    bodies = []
+    monkeypatch.setattr("stomclient.ui.main_window.QMessageBox.information",
+                        lambda parent, title, body, *a, **k: bodies.append(body))
+    controller = AppController(cloud_client=None)
+    window = MainWindow(controller)
+    window._set_engine_update_available(True)     # show the update banner
+    assert window._update_banner.isHidden() is False
+
+    class _Eng:
+        pass
+
+    window._installing_clean = True               # as _start_engine_install(clean=True) would
+    window._on_install_done(_Eng())               # signal arrives with no updated kwarg
+    assert window._update_banner.isHidden() is True  # update path taken
+    assert bodies == [S.MSG["update_done_body"]]      # update (not install) message
+
+
 def test_main_window_apply_config_sets_cloud(qapp, monkeypatch):
     from stomclient.config import ClientConfig
     from stomclient.ui.main_window import MainWindow

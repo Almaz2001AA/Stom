@@ -3,7 +3,7 @@
 
 [Setup]
 AppName=Stom CBCT Viewer
-AppVersion=0.1.9
+AppVersion=0.2.0
 AppPublisher=Stom
 DefaultDirName={autopf}\StomClient
 DefaultGroupName=Stom

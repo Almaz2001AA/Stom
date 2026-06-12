@@ -196,6 +196,43 @@ def test_engine_update_check_no_op_when_current(qapp):
     assert window._update_btn.isHidden() is True
 
 
+def test_engine_update_shows_prominent_banner(qapp, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    from stomclient.ui.main_window import MainWindow
+
+    # User declines the modal prompt; the persistent banner must stay up so the
+    # outdated engine (no progress %) cannot be silently ignored.
+    monkeypatch.setattr(QMessageBox, "question",
+                        lambda *a, **k: QMessageBox.StandardButton.No)
+    window = MainWindow(AppController(cloud_client=None))
+    assert window._update_banner.isHidden() is True
+    window._on_engine_update_checked(True)
+    assert window._update_banner.isHidden() is False
+    assert window._update_btn.isHidden() is False
+
+
+def test_engine_update_banner_hidden_after_install(qapp, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    from stomclient.ui.main_window import MainWindow
+
+    monkeypatch.setattr(QMessageBox, "question",
+                        lambda *a, **k: QMessageBox.StandardButton.No)
+    monkeypatch.setattr("stomclient.ui.main_window.QMessageBox.information",
+                        lambda *a, **k: None)
+    window = MainWindow(AppController(cloud_client=None))
+    window._on_engine_update_checked(True)
+    assert window._update_banner.isHidden() is False
+
+    class _Eng:
+        pass
+
+    window._on_install_done(_Eng(), updated=True)  # finished update clears it
+    assert window._update_banner.isHidden() is True
+    assert window._update_btn.isHidden() is True
+
+
 def test_local_error_detects_outdated_engine(qapp, monkeypatch):
     from stomclient.ui.main_window import MainWindow
 

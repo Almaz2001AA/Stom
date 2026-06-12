@@ -170,6 +170,12 @@ class MainWindow(QMainWindow):
         self._update_btn.setToolTip(S.TIP["update_engine"])
         self._update_btn.setVisible(False)
         self._update_btn.clicked.connect(lambda: self._start_engine_install(clean=True))
+        # Prominent, persistent warning banner across the top of the window: a
+        # plain side button is too easy to miss, so an outdated engine (which
+        # silently disables the live progress %) must announce itself loudly and
+        # stay up until the update is actually applied.
+        self._update_banner = self._build_update_banner()
+        self._update_banner.setVisible(False)
         self._measure_btn = QPushButton(S.BTN["measure"])
         self._measure_btn.setCheckable(True)
         self._measure_btn.toggled.connect(self.slice_widget.set_measure_mode)
@@ -205,9 +211,13 @@ class MainWindow(QMainWindow):
         left_panel = QWidget()
         left_panel.setLayout(left)
 
-        root = QHBoxLayout()
-        root.addWidget(left_panel, 0)
-        root.addWidget(self.slice_widget, 1)
+        body = QHBoxLayout()
+        body.addWidget(left_panel, 0)
+        body.addWidget(self.slice_widget, 1)
+        root = QVBoxLayout()
+        root.setContentsMargins(0, 0, 0, 0)
+        root.addWidget(self._update_banner)  # full-width, above the panel + view
+        root.addLayout(body, 1)
         central = QWidget()
         central.setLayout(root)
         self.setCentralWidget(central)
@@ -301,6 +311,31 @@ class MainWindow(QMainWindow):
 
     # --- engine install / update --------------------------------------------
 
+    def _build_update_banner(self) -> QWidget:
+        """A loud, full-width warning bar urging the user to update the engine."""
+        banner = QFrame()
+        banner.setObjectName("updateBanner")
+        banner.setStyleSheet(
+            "#updateBanner { background: #FFF3CD; border: 1px solid #FFE69C; }"
+            "#updateBanner QLabel { color: #664D03; }"
+        )
+        label = QLabel(S.MSG["engine_update_banner"])
+        label.setWordWrap(True)
+        font = label.font()
+        font.setBold(True)
+        label.setFont(font)
+        button = QPushButton(S.BTN["update_engine"])
+        button.clicked.connect(lambda: self._start_engine_install(clean=True))
+        layout = QHBoxLayout(banner)
+        layout.addWidget(label, 1)
+        layout.addWidget(button, 0)
+        return banner
+
+    def _set_engine_update_available(self, available: bool) -> None:
+        """Show/hide both the side button and the top banner together."""
+        self._update_btn.setVisible(available)
+        self._update_banner.setVisible(available)
+
     def _start_engine_install(self, *, clean: bool) -> None:
         if self._install_thread is not None and self._install_thread.isRunning():
             return
@@ -349,7 +384,7 @@ class MainWindow(QMainWindow):
         self._install_btn.setEnabled(True)
         self._install_btn.setVisible(False)
         self._update_btn.setEnabled(True)
-        self._update_btn.setVisible(False)
+        self._set_engine_update_available(False)
         self._c.set_engine(engine)
         self._local_chk.setEnabled(True)
         self._local_chk.setToolTip(S.TIP["local_on"])
@@ -397,7 +432,7 @@ class MainWindow(QMainWindow):
     def _on_engine_update_checked(self, available: object) -> None:
         if not available:
             return
-        self._update_btn.setVisible(True)
+        self._set_engine_update_available(True)
         if QMessageBox.question(
             self, S.MSG["engine_update_title"], S.MSG["engine_update_body"]
         ) == QMessageBox.StandardButton.Yes:
@@ -509,7 +544,7 @@ class MainWindow(QMainWindow):
         short = S.MSG["seg_error_title"]
         if outdated:
             short += S.MSG["engine_outdated_hint"]
-            self._update_btn.setVisible(True)
+            self._set_engine_update_available(True)
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Icon.Critical)
         box.setWindowTitle(S.MSG["seg_error_title"])

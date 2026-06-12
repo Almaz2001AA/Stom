@@ -13,3 +13,9 @@ models/
 
 # brainstorming visual companion
 .superpowers/
+
+# local runtime data / scratch (not part of the repo)
+*.db
+storage/
+a.png
+aa.png

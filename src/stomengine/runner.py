@@ -12,7 +12,7 @@ import numpy as np
 from stomcore.geometry import Geometry
 from stomcore.volume import Volume
 
-_TTA_DISABLE_VALUES = {"1", "true", "yes", "on"}
+_TRUTHY_VALUES = {"1", "true", "yes", "on"}
 
 # A progress callback receives (steps_done, steps_total) for the sliding-window
 # tile loop — the long part of CPU inference — so the UI can show a percentage.
@@ -23,12 +23,27 @@ def tta_enabled(env: Mapping[str, str] | None = None) -> bool:
     """Whether test-time augmentation (mirroring) is on for inference.
 
     TTA evaluates every mirror of each tile, roughly octupling CPU inference
-    time for a small accuracy gain. Set ``STOM_DISABLE_TTA`` to a truthy value
-    (``1``/``true``/``yes``/``on``) to turn it off for ~8x faster local
-    segmentation (≈1.5-2 min instead of ~10). Default: enabled.
+    time for a small accuracy gain. It is **off by default** so local CPU
+    segmentation is fast (≈1.5-2 min instead of ~10); set ``STOM_ENABLE_TTA``
+    to a truthy value (``1``/``true``/``yes``/``on``) to restore full-accuracy
+    mirroring.
     """
     env = os.environ if env is None else env
-    return env.get("STOM_DISABLE_TTA", "").strip().lower() not in _TTA_DISABLE_VALUES
+    return env.get("STOM_ENABLE_TTA", "").strip().lower() in _TRUTHY_VALUES
+
+
+def num_threads(env: Mapping[str, str] | None = None) -> int:
+    """CPU threads for inference: ``STOM_NUM_THREADS`` if set, else all cores.
+
+    Forces full CPU utilisation for the conv-heavy sliding-window inference; the
+    frozen engine can otherwise default to too few threads. A positive
+    ``STOM_NUM_THREADS`` overrides (e.g. to leave cores free for the desktop).
+    """
+    env = os.environ if env is None else env
+    raw = env.get("STOM_NUM_THREADS", "").strip()
+    if raw.isdigit() and int(raw) > 0:
+        return int(raw)
+    return os.cpu_count() or 1
 
 # DentalSegmentator (Dataset112) foreground intensity stats, from the weights'
 # dataset_fingerprint.json. The model's CTNormalization assumes inputs live in
@@ -170,8 +185,8 @@ class DentalSegmentatorRunner:
 
     def __init__(self, model_dir: str, *, use_tta: bool | None = None) -> None:
         self._model_dir = model_dir
-        # TTA mirroring ~8x's CPU inference; resolve from STOM_DISABLE_TTA unless
-        # an explicit choice is passed.
+        # TTA mirroring ~8x's CPU inference; off by default (resolve from
+        # STOM_ENABLE_TTA) unless an explicit choice is passed.
         self._use_tta = tta_enabled() if use_tta is None else use_tta
 
     def predict(
@@ -186,6 +201,10 @@ class DentalSegmentatorRunner:
         from nnunetv2.inference.predict_from_raw_data import nnUNetPredictor
 
         from stomcore.sitk_interop import geometry_from_sitk, sitk_from_volume
+
+        # Use all CPU cores for the conv-heavy sliding-window inference; the
+        # frozen engine can otherwise under-utilise the CPU.
+        torch.set_num_threads(num_threads())
 
         # Map this scanner's intensities onto the model's training domain so
         # non-HU CBCT does not segment to an empty mask.

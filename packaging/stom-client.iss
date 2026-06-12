@@ -3,7 +3,7 @@
 
 [Setup]
 AppName=Stom CBCT Viewer
-AppVersion=0.1.3
+AppVersion=0.1.5
 AppPublisher=Stom
 DefaultDirName={autopf}\StomClient
 DefaultGroupName=Stom
@@ -15,6 +15,10 @@ SolidCompression=yes
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 WizardStyle=modern
+; In-app updater downloads + launches this installer while the app may still be
+; running; let Setup close the running instance so it can replace the files.
+CloseApplications=yes
+RestartApplications=no
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons:"

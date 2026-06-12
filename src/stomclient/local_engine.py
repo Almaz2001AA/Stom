@@ -17,21 +17,36 @@ from pathlib import Path
 ProgressCb = Callable[[int, int], None]  # (bytes_done, bytes_total)
 
 
-def provision_local_engine(progress: ProgressCb | None = None):
+def provision_local_engine(progress: ProgressCb | None = None, *, clean: bool = False):
     """Download + install the engine-pack and return a ready ``SubprocessEngine``.
 
-    Used by the slim client's first-run "Install local engine" action: fetch the
-    release manifest, download + verify + extract the engine-pack, and point a
-    subprocess engine at the unpacked binary. Raises on any failure (network,
-    checksum, missing binary) so the caller can surface it to the user.
+    Used by the slim client's "Install local engine" (first run) and "Update
+    engine" actions: fetch the release manifest, download + verify + extract the
+    engine-pack, and point a subprocess engine at the unpacked binary. Pass
+    ``clean=True`` for an update so the old pack's files are removed first. Raises
+    on any failure (network, checksum, missing binary) for the caller to surface.
     """
     from stomengine import SubprocessEngine
 
     from . import engine_pack
 
     manifest = engine_pack.fetch_manifest()
-    exe = engine_pack.provision(manifest, progress=progress)
+    exe = engine_pack.provision(manifest, progress=progress, clean=clean)
     return SubprocessEngine(str(exe))
+
+
+def engine_update_available() -> bool:
+    """Whether a newer engine-pack than the installed one is published.
+
+    Network-tolerant: any failure (offline, GitHub down) returns False so startup
+    never blocks or errors on the update check.
+    """
+    try:
+        from . import engine_pack
+
+        return engine_pack.engine_update_available(engine_pack.fetch_manifest())
+    except Exception:  # noqa: BLE001 - update check must never break startup
+        return False
 
 
 def build_local_engine(model_dir: str | None = None):

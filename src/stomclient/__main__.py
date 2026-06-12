@@ -22,6 +22,8 @@ def main() -> int:
     window = MainWindow(AppController(cloud_client=cloud, engine=engine))
     window.resize(1100, 800)
     window.show()
+    # Fail-soft engine + client update checks, after the window is up.
+    window.check_for_updates()
     return app.exec()
 
 

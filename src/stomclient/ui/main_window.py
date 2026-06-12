@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtCore import QObject, QThread, QTimer, Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFileDialog,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -26,6 +29,7 @@ from .. import slice_renderer as sr
 from ..app_controller import AppController, State
 from ..cloud_client import CloudClient, CloudError
 from ..config import load, save
+from . import strings as S
 from .settings_dialog import SettingsDialog
 from .slice_widget import SliceWidget
 
@@ -48,7 +52,7 @@ class _SubmitWorker(QObject):
 
 
 class _InstallWorker(QObject):
-    """Downloads + installs the engine-pack off the UI thread."""
+    """Downloads + installs (or updates) the engine-pack off the UI thread."""
     progress = Signal(int, int)  # (bytes_done, bytes_total)
     done = Signal(object)        # the ready engine
     failed = Signal(str)
@@ -65,60 +69,135 @@ class _InstallWorker(QObject):
             self.failed.emit(str(exc))
 
 
+class _FnWorker(QObject):
+    """Runs a no-arg function off the UI thread and emits its result.
+
+    Used for the fail-soft startup update checks (engine + client), which do
+    network I/O and must not block window construction.
+    """
+    done = Signal(object)
+
+    def __init__(self, fn) -> None:
+        super().__init__()
+        self._fn = fn
+
+    def run(self) -> None:
+        try:
+            self.done.emit(self._fn())
+        except Exception:  # noqa: BLE001 - update checks never surface errors
+            self.done.emit(None)
+
+
+class _DownloadWorker(QObject):
+    """Downloads the client installer off the UI thread."""
+    progress = Signal(int, int)
+    done = Signal(str)   # path to the downloaded installer
+    failed = Signal(str)
+
+    def __init__(self, url: str, dest: Path) -> None:
+        super().__init__()
+        self._url = url
+        self._dest = dest
+
+    def run(self) -> None:
+        from ..updates import download_installer
+
+        try:
+            path = download_installer(
+                self._url, self._dest,
+                progress=lambda d, t: self.progress.emit(d, t),
+            )
+            self.done.emit(str(path))
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit(str(exc))
+
+
+def _section(title: str) -> QLabel:
+    """A bold section header for the left panel."""
+    label = QLabel(title)
+    font = label.font()
+    font.setBold(True)
+    label.setFont(font)
+    return label
+
+
+def _separator() -> QFrame:
+    line = QFrame()
+    line.setFrameShape(QFrame.Shape.HLine)
+    line.setFrameShadow(QFrame.Shadow.Sunken)
+    return line
+
+
 class MainWindow(QMainWindow):
     def __init__(self, controller: AppController) -> None:
         super().__init__()
         self._c = controller
         self._config = load()
-        self.setWindowTitle("Stom — CBCT Viewer")
+        self.setWindowTitle(S.WINDOW_TITLE)
 
         self.slice_widget = SliceWidget(controller)
-        self._status = QLabel("No study")
+        self._status = QLabel(S.STATUS[State.EMPTY])
         self._plane = QComboBox()
-        self._plane.addItems(list(sr.PLANES))
-        self._plane.currentTextChanged.connect(self._on_plane)
+        for plane in sr.PLANES:
+            self._plane.addItem(S.PLANE.get(plane, plane), plane)
+        self._plane.currentIndexChanged.connect(self._on_plane)
 
-        settings_btn = QPushButton("Settings…")
+        settings_btn = QPushButton(S.BTN["settings"])
         settings_btn.clicked.connect(self._on_settings)
-        open_btn = QPushButton("Open DICOM…")
+        open_btn = QPushButton(S.BTN["open"])
         open_btn.clicked.connect(self._on_open)
-        self._segment_btn = QPushButton("Upload & Segment")
+        self._segment_btn = QPushButton(S.BTN["segment_cloud"])
         self._segment_btn.clicked.connect(self._on_segment)
         # Local (on-device) segmentation: only offered when an engine is wired,
         # so there is no network round-trip for the large study upload.
-        self._local_chk = QCheckBox("Local (on-device)")
+        self._local_chk = QCheckBox(S.BTN["local_checkbox"])
         self._local_chk.setEnabled(self._c.local_available)
         self._local_chk.setToolTip(
-            "Segment on this PC — no server upload."
-            if self._c.local_available
-            else "Local engine not installed."
+            S.TIP["local_on"] if self._c.local_available else S.TIP["local_off"]
         )
         self._local_chk.toggled.connect(self._on_local_toggled)
         # First-run install of the engine-pack: shown only until an engine is
         # wired, so the checkbox above can actually be enabled on a slim client.
-        self._install_btn = QPushButton("Install local engine…")
-        self._install_btn.setToolTip("Download the on-device segmentation engine (~0.5 GB).")
+        self._install_btn = QPushButton(S.BTN["install_engine"])
+        self._install_btn.setToolTip(S.TIP["install_engine"])
         self._install_btn.setVisible(not self._c.local_available)
-        self._install_btn.clicked.connect(self._on_install_engine)
-        self._measure_btn = QPushButton("Measure")
+        self._install_btn.clicked.connect(lambda: self._start_engine_install(clean=False))
+        # Engine update: hidden until the startup check finds a newer engine-pack.
+        self._update_btn = QPushButton(S.BTN["update_engine"])
+        self._update_btn.setToolTip(S.TIP["update_engine"])
+        self._update_btn.setVisible(False)
+        self._update_btn.clicked.connect(lambda: self._start_engine_install(clean=True))
+        self._measure_btn = QPushButton(S.BTN["measure"])
         self._measure_btn.setCheckable(True)
         self._measure_btn.toggled.connect(self.slice_widget.set_measure_mode)
-        clear_btn = QPushButton("Clear measurements")
+        clear_btn = QPushButton(S.BTN["clear_measure"])
         clear_btn.clicked.connect(self._on_clear_measurements)
-        png_btn = QPushButton("Save PNG…")
+        png_btn = QPushButton(S.BTN["save_png"])
         png_btn.clicked.connect(self._on_save_png)
-        mask_btn = QPushButton("Save Mask…")
+        mask_btn = QPushButton(S.BTN["save_mask"])
         mask_btn.clicked.connect(self._on_save_mask)
 
         self.mask_list = QListWidget()
         self.mask_list.itemChanged.connect(self._on_mask_item_changed)
 
         left = QVBoxLayout()
-        for w in (settings_btn, open_btn, self._segment_btn, self._local_chk,
-                  self._install_btn, self._plane, self._measure_btn,
-                  clear_btn, png_btn, mask_btn, QLabel("Masks:"), self.mask_list,
-                  self._status):
+        left.addWidget(settings_btn)
+        left.addWidget(_separator())
+        left.addWidget(_section(S.SECTION["study"]))
+        left.addWidget(open_btn)
+        left.addWidget(_section(S.SECTION["segmentation"]))
+        for w in (self._local_chk, self._segment_btn, self._install_btn, self._update_btn):
             left.addWidget(w)
+        left.addWidget(_section(S.SECTION["tools"]))
+        for w in (self._plane, self._measure_btn, clear_btn):
+            left.addWidget(w)
+        left.addWidget(_section(S.SECTION["export"]))
+        for w in (png_btn, mask_btn):
+            left.addWidget(w)
+        left.addWidget(_section(S.SECTION["masks"]))
+        left.addWidget(self.mask_list)
+        left.addWidget(_separator())
+        left.addWidget(self._status)
         left.addStretch(1)
         left_panel = QWidget()
         left_panel.setLayout(left)
@@ -136,9 +215,12 @@ class MainWindow(QMainWindow):
         self._thread: QThread | None = None
         self._install_thread: QThread | None = None
         self._install_progress: QProgressDialog | None = None
+        self._check_threads: list[QThread] = []
+        self._dl_thread: QThread | None = None
+        self._dl_progress: QProgressDialog | None = None
 
     def refresh(self) -> None:
-        self._status.setText(self._c.state.value)
+        self._status.setText(S.STATUS.get(self._c.state, self._c.state.value))
         self._rebuild_mask_list()
         self.slice_widget.update()
 
@@ -161,19 +243,20 @@ class MainWindow(QMainWindow):
         self._c.set_label_visible(label_id, item.checkState() == Qt.CheckState.Checked)
         self.slice_widget.update()
 
-    def _on_plane(self, plane: str) -> None:
-        if self._c.volume is not None:
+    def _on_plane(self, _index: int) -> None:
+        plane = self._plane.currentData()
+        if plane is not None and self._c.volume is not None:
             self._c.set_plane(plane)
             self.refresh()
 
     def _on_open(self) -> None:
-        directory = QFileDialog.getExistingDirectory(self, "Open DICOM series")
+        directory = QFileDialog.getExistingDirectory(self, S.BTN["open"])
         if not directory:
             return
         try:
             volume = DicomLoader.load(directory)
         except DicomError as exc:
-            QMessageBox.critical(self, "DICOM error", str(exc))
+            QMessageBox.critical(self, S.MSG["dicom_error_title"], str(exc))
             return
         self._c.load_volume(volume)
         self.refresh()
@@ -183,15 +266,15 @@ class MainWindow(QMainWindow):
         self.slice_widget.update()
 
     def _on_save_png(self) -> None:
-        path, _ = QFileDialog.getSaveFileName(self, "Save PNG", "slice.png", "PNG (*.png)")
+        path, _ = QFileDialog.getSaveFileName(self, S.BTN["save_png"], "slice.png", "PNG (*.png)")
         if path:
             self.slice_widget.render_image().save(path, "PNG")
 
     def _on_save_mask(self) -> None:
         if self._c.mask is None:
-            QMessageBox.information(self, "No mask", "No mask to save yet.")
+            QMessageBox.information(self, S.MSG["no_mask_title"], S.MSG["no_mask_body"])
             return
-        path, _ = QFileDialog.getSaveFileName(self, "Save mask", "mask.nii.gz", "NIfTI (*.nii.gz)")
+        path, _ = QFileDialog.getSaveFileName(self, S.BTN["save_mask"], "mask.nii.gz", "NIfTI (*.nii.gz)")
         if path:
             labels_path = path.replace(".nii.gz", "").rstrip(".") + "_labels.json"
             save_mask_nifti(self._c.mask, path, labels_path)
@@ -209,62 +292,177 @@ class MainWindow(QMainWindow):
 
     def _on_local_toggled(self, checked: bool) -> None:
         self._c.set_local_mode(checked)
-        self._segment_btn.setText("Segment (local)" if checked else "Upload & Segment")
+        self._segment_btn.setText(
+            S.BTN["segment_local"] if checked else S.BTN["segment_cloud"]
+        )
 
-    def _on_install_engine(self) -> None:
+    # --- engine install / update --------------------------------------------
+
+    def _start_engine_install(self, *, clean: bool) -> None:
         if self._install_thread is not None and self._install_thread.isRunning():
             return
         from ..local_engine import provision_local_engine
 
+        def _provision(progress):
+            return provision_local_engine(progress=progress, clean=clean)
+
         self._install_btn.setEnabled(False)
+        self._update_btn.setEnabled(False)
         self._install_progress = QProgressDialog(
-            "Downloading on-device engine…", None, 0, 100, self
+            S.MSG["update_progress"] if clean else S.MSG["install_progress"],
+            None, 0, 100, self,
         )
-        self._install_progress.setWindowTitle("Install local engine")
+        self._install_progress.setWindowTitle(
+            S.MSG["update_title"] if clean else S.MSG["install_title"]
+        )
         self._install_progress.setWindowModality(Qt.WindowModality.WindowModal)
         self._install_progress.setAutoClose(True)
         self._install_progress.setMinimumDuration(0)
         self._install_progress.setValue(0)
 
         self._install_thread = QThread(self)
-        worker = _InstallWorker(provision_local_engine)
+        worker = _InstallWorker(_provision)
         worker.moveToThread(self._install_thread)
         self._install_thread.started.connect(worker.run)
         worker.progress.connect(self._on_install_progress)
-        worker.done.connect(self._on_install_done)
+        worker.done.connect(lambda eng: self._on_install_done(eng, updated=clean))
         worker.failed.connect(self._on_install_failed)
         worker.done.connect(self._install_thread.quit)
         worker.failed.connect(self._install_thread.quit)
         self._install_worker = worker
         self._install_thread.start()
 
+    # Backwards-compatible alias for the original first-run entry point.
+    def _on_install_engine(self) -> None:
+        self._start_engine_install(clean=False)
+
     def _on_install_progress(self, done: int, total: int) -> None:
         if total > 0:
             self._install_progress.setValue(min(100, done * 100 // total))
 
-    def _on_install_done(self, engine: object) -> None:
+    def _on_install_done(self, engine: object, *, updated: bool = False) -> None:
         if self._install_progress is not None:
             self._install_progress.reset()
         self._install_btn.setEnabled(True)
         self._install_btn.setVisible(False)
+        self._update_btn.setEnabled(True)
+        self._update_btn.setVisible(False)
         self._c.set_engine(engine)
         self._local_chk.setEnabled(True)
-        self._local_chk.setToolTip("Segment on this PC — no server upload.")
+        self._local_chk.setToolTip(S.TIP["local_on"])
         self._local_chk.setChecked(True)
-        QMessageBox.information(self, "Local engine", "On-device engine installed.")
+        QMessageBox.information(
+            self, S.MSG["install_done_title"],
+            S.MSG["update_done_body"] if updated else S.MSG["install_done_body"],
+        )
 
     def _on_install_failed(self, message: str) -> None:
         if self._install_progress is not None:
             self._install_progress.reset()
         self._install_btn.setEnabled(True)
-        QMessageBox.critical(self, "Install failed", message)
+        self._update_btn.setEnabled(True)
+        QMessageBox.critical(self, S.MSG["install_failed_title"], message)
+
+    # --- startup update checks ----------------------------------------------
+
+    def check_for_updates(self) -> None:
+        """Kick off fail-soft engine + client update checks in the background.
+
+        Called from the app entry point after the window is shown — never from
+        ``__init__`` so headless construction (tests) does no network I/O.
+        """
+        from ..local_engine import engine_update_available
+        from ..updates import check_for_client_update
+
+        self._run_check(engine_update_available, self._on_engine_update_checked)
+        self._run_check(check_for_client_update, self._on_client_update_checked)
+
+    def _run_check(self, fn, slot) -> None:
+        thread = QThread(self)
+        worker = _FnWorker(fn)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.done.connect(slot)
+        worker.done.connect(thread.quit)
+        # Keep references alive until the thread finishes.
+        thread.finished.connect(lambda t=thread: self._check_threads.remove(t)
+                                if t in self._check_threads else None)
+        self._check_threads.append(thread)
+        self._check_worker = worker
+        thread.start()
+
+    def _on_engine_update_checked(self, available: object) -> None:
+        if not available:
+            return
+        self._update_btn.setVisible(True)
+        if QMessageBox.question(
+            self, S.MSG["engine_update_title"], S.MSG["engine_update_body"]
+        ) == QMessageBox.StandardButton.Yes:
+            self._start_engine_install(clean=True)
+
+    def _on_client_update_checked(self, release: object) -> None:
+        if not release:
+            return
+        if QMessageBox.question(
+            self, S.MSG["client_update_title"],
+            S.MSG["client_update_body"].format(version=release.get("version", "")),
+        ) == QMessageBox.StandardButton.Yes:
+            self._start_client_update(release)
+
+    def _start_client_update(self, release: dict) -> None:
+        if self._dl_thread is not None and self._dl_thread.isRunning():
+            return
+        import tempfile
+
+        dest = Path(tempfile.gettempdir()) / "StomClientSetup.exe"
+        self._dl_progress = QProgressDialog(
+            S.MSG["client_update_progress"], None, 0, 100, self
+        )
+        self._dl_progress.setWindowTitle(S.MSG["client_update_title"])
+        self._dl_progress.setWindowModality(Qt.WindowModality.WindowModal)
+        self._dl_progress.setMinimumDuration(0)
+        self._dl_progress.setValue(0)
+
+        self._dl_thread = QThread(self)
+        worker = _DownloadWorker(release["url"], dest)
+        worker.moveToThread(self._dl_thread)
+        self._dl_thread.started.connect(worker.run)
+        worker.progress.connect(self._on_dl_progress)
+        worker.done.connect(self._on_client_downloaded)
+        worker.failed.connect(self._on_client_dl_failed)
+        worker.done.connect(self._dl_thread.quit)
+        worker.failed.connect(self._dl_thread.quit)
+        self._dl_worker = worker
+        self._dl_thread.start()
+
+    def _on_dl_progress(self, done: int, total: int) -> None:
+        if self._dl_progress is not None and total > 0:
+            self._dl_progress.setValue(min(100, done * 100 // total))
+
+    def _on_client_downloaded(self, path: str) -> None:
+        from ..updates import launch_installer
+
+        if self._dl_progress is not None:
+            self._dl_progress.reset()
+        QMessageBox.information(
+            self, S.MSG["client_update_ready_title"], S.MSG["client_update_ready_body"]
+        )
+        launch_installer(Path(path))
+        self.close()
+
+    def _on_client_dl_failed(self, message: str) -> None:
+        if self._dl_progress is not None:
+            self._dl_progress.reset()
+        QMessageBox.critical(self, S.MSG["client_update_failed_title"], message)
+
+    # --- segmentation --------------------------------------------------------
 
     def _on_segment(self) -> None:
         if not self._c.local and not self._config.server_url:
-            QMessageBox.information(self, "No server", "Open Settings and set the server URL.")
+            QMessageBox.information(self, S.MSG["no_server_title"], S.MSG["no_server_body"])
             return
         if self._c.volume is None:
-            QMessageBox.information(self, "No study", "Open a DICOM series first.")
+            QMessageBox.information(self, S.MSG["no_study_title"], S.MSG["no_study_body"])
             return
         if self._thread is not None and self._thread.isRunning():
             return
@@ -285,19 +483,39 @@ class MainWindow(QMainWindow):
         self._poll_timer.start()
 
     def _on_submit_failed(self, message: str) -> None:
-        title = "Segmentation error" if self._c.local else "Cloud error"
-        QMessageBox.critical(self, title, message)
+        if self._c.local:
+            self._show_local_engine_error(message)
+        else:
+            QMessageBox.critical(self, S.MSG["cloud_error_title"], message)
         self.refresh()
+
+    def _show_local_engine_error(self, message: str) -> None:
+        """Friendly error for a failed local run: short text + collapsible details.
+
+        If the failure looks like the pre-freeze_support engine-pack (the bug that
+        hung/crashed inference), point the user at "Обновить движок…".
+        """
+        outdated = "freeze_support" in message or "bootstrapping phase" in message
+        short = S.MSG["seg_error_title"]
+        if outdated:
+            short += S.MSG["engine_outdated_hint"]
+            self._update_btn.setVisible(True)
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Critical)
+        box.setWindowTitle(S.MSG["seg_error_title"])
+        box.setText(short)
+        box.setDetailedText(message)
+        box.exec()
 
     def _on_poll_tick(self) -> None:
         try:
             terminal = self._c.poll()
         except CloudError as exc:
             self._poll_timer.stop()
-            QMessageBox.critical(self, "Cloud error", str(exc))
+            QMessageBox.critical(self, S.MSG["cloud_error_title"], str(exc))
             return
         if terminal:
             self._poll_timer.stop()
             if self._c.state == State.FAILED:
-                QMessageBox.warning(self, "Segmentation failed", self._c.error or "")
+                QMessageBox.warning(self, S.MSG["seg_failed_title"], self._c.error or "")
         self.refresh()

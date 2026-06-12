@@ -9,8 +9,10 @@ from stomclient import engine_pack
 from stomclient.engine_pack import (
     EXE_NAME,
     download,
+    engine_update_available,
     find_engine_exe,
     install_pack,
+    installed_version,
     provision,
 )
 
@@ -112,3 +114,55 @@ def test_engine_dir_is_under_user_home(monkeypatch):
     # Sanity: resolves to a Stom/engine path without raising.
     d = engine_pack.engine_dir()
     assert d.name == "engine" and d.parent.name == "Stom"
+
+
+# --- version marker + update detection --------------------------------------
+
+def test_provision_writes_version_marker(tmp_path):
+    data = _make_pack(nested=True)
+    root = tmp_path / "root"
+    manifest = {"url": "http://x/e.zip", "version": "v0.1.4",
+                "sha256": hashlib.sha256(data).hexdigest()}
+    provision(manifest, opener=_opener_for(data), root=root)
+    assert installed_version(root) == "v0.1.4"
+
+
+def test_installed_version_none_without_marker(tmp_path):
+    assert installed_version(tmp_path / "nope") is None
+
+
+def test_update_available_when_versions_differ(tmp_path):
+    data = _make_pack(nested=True)
+    root = tmp_path / "root"
+    provision({"url": "http://x/e.zip", "version": "v0.1.3",
+               "sha256": hashlib.sha256(data).hexdigest()},
+              opener=_opener_for(data), root=root)
+    assert engine_update_available({"version": "v0.1.4"}, root) is True
+    assert engine_update_available({"version": "v0.1.3"}, root) is False
+
+
+def test_update_available_for_legacy_install_without_marker(tmp_path):
+    # An exe present but no marker = the broken v0.1.2/v0.1.3 pack -> offer update.
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / EXE_NAME).write_text("#!/bin/sh\n")
+    assert installed_version(root) is None
+    assert engine_update_available({"version": "v0.1.4"}, root) is True
+
+
+def test_update_not_available_when_nothing_installed(tmp_path):
+    # No exe at all is the *install* flow, not an update.
+    assert engine_update_available({"version": "v0.1.4"}, tmp_path / "empty") is False
+
+
+def test_clean_install_removes_stale_files(tmp_path):
+    root = tmp_path / "root"
+    root.mkdir()
+    stale = root / "stale_old_file.txt"
+    stale.write_text("leftover from old pack")
+    data = _make_pack(nested=True)
+    provision({"url": "http://x/e.zip", "version": "v0.1.4",
+               "sha256": hashlib.sha256(data).hexdigest()},
+              opener=_opener_for(data), root=root, clean=True)
+    assert not stale.exists()
+    assert find_engine_exe(root) is not None

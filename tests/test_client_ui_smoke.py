@@ -148,3 +148,64 @@ def test_main_window_apply_config_sets_cloud(qapp, monkeypatch):
     window._apply_config(ClientConfig(server_url="http://x", token="t"))
     assert window._config.server_url == "http://x"
     assert controller._cloud is not None
+
+
+def test_status_label_is_russian(qapp):
+    from stomclient.ui import strings as S
+    from stomclient.ui.main_window import MainWindow
+
+    controller = AppController(cloud_client=None)
+    window = MainWindow(controller)
+    window.refresh()
+    assert window._status.text() == S.STATUS[controller.state]
+    assert window._status.text() == "Нет исследования"
+
+
+def test_plane_combo_maps_russian_label_to_plane_id(qapp):
+    from stomclient.ui.main_window import MainWindow
+
+    controller = AppController(cloud_client=None)
+    controller.load_volume(
+        Volume(np.zeros((4, 5, 6), dtype=np.int16), Geometry.identity((0.3, 0.3, 0.3)))
+    )
+    window = MainWindow(controller)
+    # Combo shows Russian labels but carries the renderer's plane id as data.
+    window._plane.setCurrentIndex(window._plane.findText("Корональная"))
+    assert controller.plane == "coronal"
+
+
+def test_engine_update_check_reveals_update_button(qapp, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    from stomclient.ui.main_window import MainWindow
+
+    # User declines the offered update; the button must remain for later.
+    monkeypatch.setattr(QMessageBox, "question",
+                        lambda *a, **k: QMessageBox.StandardButton.No)
+    window = MainWindow(AppController(cloud_client=None))
+    assert window._update_btn.isHidden() is True
+    window._on_engine_update_checked(True)
+    assert window._update_btn.isHidden() is False
+
+
+def test_engine_update_check_no_op_when_current(qapp):
+    from stomclient.ui.main_window import MainWindow
+
+    window = MainWindow(AppController(cloud_client=None))
+    window._on_engine_update_checked(False)
+    assert window._update_btn.isHidden() is True
+
+
+def test_local_error_detects_outdated_engine(qapp, monkeypatch):
+    from stomclient.ui.main_window import MainWindow
+
+    # The error dialog is modal; intercept exec so the test stays headless.
+    monkeypatch.setattr("stomclient.ui.main_window.QMessageBox.exec",
+                        lambda self: None, raising=False)
+    controller = AppController(cloud_client=None)
+    window = MainWindow(controller)
+    window._show_local_engine_error(
+        "local engine failed: RuntimeError ... freeze_support()"
+    )
+    # A freeze_support failure means a stale pack -> offer the update button.
+    assert window._update_btn.isHidden() is False

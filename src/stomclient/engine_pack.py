@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import tempfile
 import zipfile
 from collections.abc import Callable
@@ -21,6 +22,11 @@ from pathlib import Path
 from urllib.request import urlopen
 
 EXE_NAME = "stom-engine.exe" if os.name == "nt" else "stom-engine"
+
+# Records which engine-pack version is unpacked under engine_dir(), so the client
+# can tell an out-of-date (or pre-versioning, marker-less) install from a current
+# one and offer an update. Written by provision() after a successful extract.
+MARKER_NAME = "installed.json"
 
 # Stable URL: GitHub serves the latest release's asset by name. CI publishes
 # both the manifest and the versioned engine-pack zip it points at.
@@ -58,6 +64,45 @@ def find_engine_exe(root: Path | None = None) -> Path | None:
     return None
 
 
+def installed_version(root: Path | None = None) -> str | None:
+    """Version of the unpacked engine-pack, or None if unknown/not installed.
+
+    Returns None when no marker exists — either nothing is installed, or it is a
+    pre-versioning install (e.g. the broken v0.1.2/v0.1.3 pack). Callers pair this
+    with :func:`find_engine_exe` to tell "nothing installed" from "legacy install".
+    """
+    marker = (root or engine_dir()) / MARKER_NAME
+    if not marker.exists():
+        return None
+    try:
+        return json.loads(marker.read_text()).get("version")
+    except (ValueError, OSError):
+        return None
+
+
+def _write_marker(version: str | None, sha256: str | None, root: Path) -> None:
+    if not version:
+        return
+    (root / MARKER_NAME).write_text(
+        json.dumps({"version": version, "sha256": sha256})
+    )
+
+
+def engine_update_available(manifest: dict, root: Path | None = None) -> bool:
+    """Whether the installed engine-pack differs from ``manifest``'s version.
+
+    True when a pack is installed but its version differs from the manifest, or
+    when an engine exe is present without a version marker (legacy/broken pack —
+    e.g. the user's v0.1.3 install that hangs on freeze_support). False when
+    nothing is installed at all (that is the *install* flow, not an update).
+    """
+    root = root or engine_dir()
+    current = installed_version(root)
+    if current is None:
+        return find_engine_exe(root) is not None
+    return current != manifest.get("version")
+
+
 def _sha256(path: Path) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -85,11 +130,18 @@ def download(url: str, dest: Path, *, progress: ProgressCb | None = None, opener
                     progress(done, total)
 
 
-def install_pack(zip_path: Path, *, sha256: str | None = None, root: Path | None = None) -> Path:
-    """Verify and extract an engine-pack zip; return the engine executable path."""
+def install_pack(zip_path: Path, *, sha256: str | None = None, root: Path | None = None,
+                  clean: bool = False) -> Path:
+    """Verify and extract an engine-pack zip; return the engine executable path.
+
+    ``clean`` wipes ``root`` before extracting so an update does not leave stale
+    files from the previous pack behind.
+    """
     root = root or engine_dir()
     if sha256 and _sha256(zip_path).lower() != sha256.lower():
         raise ValueError("engine-pack checksum mismatch — download corrupted")
+    if clean and root.exists():
+        shutil.rmtree(root)
     root.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(zip_path) as z:
         z.extractall(root)
@@ -102,14 +154,18 @@ def install_pack(zip_path: Path, *, sha256: str | None = None, root: Path | None
 
 
 def provision(manifest: dict, *, progress: ProgressCb | None = None, opener=urlopen,
-              root: Path | None = None) -> Path:
+              root: Path | None = None, clean: bool = False) -> Path:
     """Download + verify + extract the engine-pack described by ``manifest``.
 
     ``manifest`` = ``{"url": ..., "sha256": ..., "version": ...}``.
+    Records the installed version so later runs can detect an out-of-date pack.
+    Pass ``clean=True`` for an update so stale files from the old pack are removed.
     Returns the path to the ready-to-run engine executable.
     """
     root = root or engine_dir()
     with tempfile.TemporaryDirectory() as tmp:
         zp = Path(tmp) / "engine-pack.zip"
         download(manifest["url"], zp, progress=progress, opener=opener)
-        return install_pack(zp, sha256=manifest.get("sha256"), root=root)
+        exe = install_pack(zp, sha256=manifest.get("sha256"), root=root, clean=clean)
+    _write_marker(manifest.get("version"), manifest.get("sha256"), root)
+    return exe

@@ -1,7 +1,30 @@
 # Где я остановился — продолжить отсюда
 
 **Последнее обновление:** 2026-06-12 (день). Всё закоммичено и запушено в `origin/master`.
-Ветка: `master` (HEAD `f6ed818`). Локальная ветка `feat/local-segmentation` уже влита (PR #1).
+Ветка: `master` (HEAD `600dc44`). Локальная ветка `feat/local-segmentation` уже влита (PR #1).
+
+## ✅ v0.1.6 — in-process инференс (чинит краш `0xC000013A`, выпущено, smoke зелёный)
+Причина: реальный CBCT-прогон у пользователя падал с `local engine failed: exit code 3221225786`
+(`0xC000013A` = `STATUS_CONTROL_C_EXIT`) и пустым stderr. Smoke в CI проходил, т.к. там движок
+стартует из консольного `python.exe`; GUI-клиент (`stom-client.exe`) оконный → запуск консольного
+движка выделяет временную консоль, чьё закрытие шлёт `CTRL_CLOSE` воркерам `multiprocessing.Pool`
+nnU-Net → код выхода воркера всплывает наверх.
+
+Корневой фикс (коммит `600dc44`, выпущен в v0.1.6):
+- `DentalSegmentatorRunner` теперь использует `nnUNetPredictor.predict_single_npy_array`
+  (`read_images` + предсказание по одному массиву + `export_prediction_from_logits`) вместо
+  `predict_from_files`. Работает полностью в процессе, НЕ плодит дочерних процессов — убирает
+  весь класс падений frozen-Windows на multiprocessing (этот краш и прошлый freeze_support-висяк).
+- Защита в глубину: `SubprocessEngine` запускает движок с `CREATE_NO_WINDOW` на Windows (не привязан
+  к временной консоли GUI, консоль не мигает); ошибки декодируют известные NTSTATUS-коды
+  (`0xC000013A/05/0135`) и фолбэчат на stdout, когда stderr пуст — вместо непрозрачного числа.
+- **Тесты:** 179 passed. Обе CI-сборки v0.1.6 зелёные, релиз опубликован (все 3 артефакта),
+  манифест `releases/latest/download/` резолвится в **v0.1.6**.
+- **Smoke зелёный против v0.1.6** (run `27410249842`, `TAG: v0.1.6` → `SMOKE TEST PASSED`, ~2 мин).
+  Важно: smoke гоняет движок из консольного python и синтетику 32³ — сам краш `0xC000013A`
+  (только в оконном GUI на реальном CBCT) он НЕ воспроизводит. Нужна проверка на машине юзера.
+- **v0.1.6 — актуальный релиз:** https://github.com/Almaz2001AA/Stom/releases/tag/v0.1.6
+  (`StomClientSetup.exe` ~192 МБ, `stom-engine-pack-win64.zip` ~551 МБ, `engine-pack-manifest.json`).
 
 ## ✅ v0.1.5 — автообновление + русский интерфейс (выпущено, smoke зелёный)
 Спека: `docs/superpowers/specs/2026-06-12-autoupdate-and-russian-ui-design.md`.
@@ -65,11 +88,12 @@
 **Релизы (CI обе сборки зелёные, артефакты в Releases):**
 - `v0.1.2`/`v0.1.3` — **НЕ использовать**: engine-pack без `freeze_support()`, инференс зависает.
 - `v0.1.4` — рабочий, но без автообновления и русского UI.
-- `v0.1.5` — **актуальный**: https://github.com/Almaz2001AA/Stom/releases/tag/v0.1.5
-  - `StomClientSetup.exe` (183 МБ, русский слим-GUI + автообновление)
-  - `stom-engine-pack-win64.zip` (525 МБ, torch CPU+nnU-Net+веса) + `engine-pack-manifest.json`
-  - Манифест по `releases/latest/download/` резолвится в v0.1.5 (клиент тянет его сам).
-  - Smoke-тест на чистой Windows VM пройден (run `27402668105`).
+- `v0.1.5` — рабочий (автообновление + русский UI), но движок падал на реальном CBCT (`0xC000013A`).
+- `v0.1.6` — **актуальный**: https://github.com/Almaz2001AA/Stom/releases/tag/v0.1.6
+  - `StomClientSetup.exe` (~192 МБ, русский слим-GUI + автообновление, `CREATE_NO_WINDOW`)
+  - `stom-engine-pack-win64.zip` (~551 МБ, torch CPU+nnU-Net+веса) + `engine-pack-manifest.json`
+  - Манифест по `releases/latest/download/` резолвится в v0.1.6 (клиент тянет его сам).
+  - Smoke-тест на чистой Windows VM пройден (run `27410249842`, `SMOKE TEST PASSED`).
 - Repo variable `WEIGHTS_URL` = Zenodo (`zenodo.org/records/10829675/.../Dataset112_DentalSegmentator_v100.zip?download=1`).
 - Теги v0.1.0/v0.1.1 заняты старыми коммитами (предшествуют workflow).
 
@@ -77,10 +101,10 @@ Smoke-тест (`.github/workflows/smoke-windows-install.yml` + `.github/scripts
 перезапускается через `workflow_dispatch` с input `tag` (напр. `tag=v0.1.5`); теперь с
 `timeout-minutes: 45` на job и `timeout=1200` на инференс — зависание падает быстро, а не за 6 ч.
 
-## Установка у конечного пользователя (v0.1.5)
+## Установка у конечного пользователя (v0.1.6)
 1. Поставить `StomClientSetup.exe` (SmartScreen → «Подробнее → Выполнить в любом случае»).
 2. В приложении нажать **«Установить движок…»** (один раз, ~0.5 ГБ → `%LOCALAPPDATA%\Stom\engine`).
-   На старом сломанном движке приложение само предложит **«Обновить движок…»** до v0.1.5.
+   На старом сломанном движке приложение само предложит **«Обновить движок…»** до v0.1.6.
 3. Галка **«Локально (на этом ПК)»** активируется → работа локально, без сервера/токена.
    Опц. системная переменная `STOM_DISABLE_TTA=1` → ускорение ~8×.
    Ручной фолбэк: распаковать engine-pack так, чтобы был `%LOCALAPPDATA%\Stom\engine\stom-engine.exe`.
@@ -118,11 +142,12 @@ Smoke-тест (`.github/workflows/smoke-windows-install.yml` + `.github/scripts
 - Память Клода: `stom-project-roadmap`, `dentalsegmentator-intensity-harmonization` — подтянутся сами.
 
 ## Открытые follow-ups
-- ✅ Windows smoke-тест — закрыт (v0.1.5 зелёный, см. выше).
+- ✅ Windows smoke-тест — закрыт (v0.1.6 зелёный, run `27410249842`).
 - ✅ Автообновление + русский UI — выпущено в v0.1.5.
-- **Проверить у пользователя:** поставить v0.1.5 поверх его установки → приложение должно само
-  предложить «Обновить движок…» (старый сломанный пакет без маркера) → локальная сегментация
-  заработает. Это первый раз, когда автообновление гоняется на реальной машине.
+- ✅ Краш `0xC000013A` у пользователя — корневой фикс выпущен в v0.1.6 (in-process инференс).
+- **ГЛАВНОЕ — проверить у пользователя:** поставить v0.1.6 поверх его установки → приложение должно
+  само предложить «Обновить движок…» → локальная сегментация на реальном CBCT должна пройти БЕЗ
+  краша `0xC000013A`. Это и есть подтверждение фикса v0.1.6 на реальном железе (smoke его не ловит).
 - Авто-обновление .exe (скачивание+запуск установщика, `CloseApplications=yes`) на реальном
   Windows ещё не проверено end-to-end (smoke его не покрывает — только engine-pack путь).
 - RAM целевого ПК (~6–8 ГБ на объём 100×700×700) не подтверждён на реальном железе.
@@ -131,6 +156,6 @@ Smoke-тест (`.github/workflows/smoke-windows-install.yml` + `.github/scripts
 - Прочие отложенные — в `docs/superpowers/plans/FOLLOWUPS-*.md`.
 
 ## Как продолжить
-Релиз v0.1.5 доведён и проверен (smoke зелёный). Главное незакрытое — проверка автообновления
-на машине пользователя (см. follow-ups). Открыть Claude Code в `/opt/almaz/test/Stom`,
-`claude --continue`.
+Релиз v0.1.6 доведён и проверен (179 тестов + smoke зелёные). Главное незакрытое — проверка на
+машине пользователя: автообновление до v0.1.6 + реальный CBCT-прогон без краша `0xC000013A`
+(см. follow-ups). Открыть Claude Code в `/opt/almaz/test/Stom`, `claude --continue`.

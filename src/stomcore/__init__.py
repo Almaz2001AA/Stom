@@ -10,7 +10,7 @@ from .volume import Volume
 # Keep in sync with [project].version in pyproject.toml at each release bump.
 # Used as the fallback version source when packaged metadata is unavailable
 # (see stomclient.updates.current_version).
-__version__ = "0.2.1"
+__version__ = "0.3.0"
 
 __all__ = [
     "DicomError",

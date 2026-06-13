@@ -7,7 +7,10 @@ from .mask_io import load_mask_nifti, save_mask_nifti
 from .nifti_io import load_volume_nifti, save_volume_nifti
 from .volume import Volume
 
-__version__ = "0.1.0"
+# Keep in sync with [project].version in pyproject.toml at each release bump.
+# Used as the fallback version source when packaged metadata is unavailable
+# (see stomclient.updates.current_version).
+__version__ = "0.2.1"
 
 __all__ = [
     "DicomError",

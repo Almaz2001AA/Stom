@@ -33,6 +33,7 @@ BTN = {
     "clear_measure": "Очистить измерения",
     "save_png": "Сохранить PNG…",
     "save_mask": "Сохранить маску…",
+    "save_stl": "Экспорт в STL…",
 }
 
 # Plane names for the orientation combo (keys are the renderer's plane ids).
@@ -73,6 +74,13 @@ MSG = {
     "no_study_body": "Сначала откройте серию DICOM.",
     "no_mask_title": "Нет маски",
     "no_mask_body": "Маска ещё не получена.",
+    "stl_progress": "Экспорт в STL…",
+    "stl_title": "Экспорт STL",
+    "stl_done_title": "Экспорт завершён",
+    "stl_done_body": "Сохранено файлов STL: {count}\nПапка: {folder}",
+    "stl_empty_title": "Нечего экспортировать",
+    "stl_empty_body": "В маске нет видимых структур для экспорта.",
+    "stl_failed_title": "Не удалось экспортировать",
     "seg_error_title": "Ошибка сегментации",
     "cloud_error_title": "Ошибка сервера",
     "seg_failed_title": "Сегментация не удалась",

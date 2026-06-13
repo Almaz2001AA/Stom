@@ -90,6 +90,40 @@ def test_main_window_mask_list_populates(qapp):
     assert window.mask_list.count() == 2
 
 
+def test_save_stl_guard_when_no_mask(qapp, monkeypatch):
+    from stomclient.ui.main_window import MainWindow
+
+    seen = {}
+    monkeypatch.setattr("stomclient.ui.main_window.QMessageBox.information",
+                        lambda *a, **k: seen.setdefault("info", True))
+    # Must NOT reach the directory picker when there is no mask.
+    monkeypatch.setattr("stomclient.ui.main_window.QFileDialog.getExistingDirectory",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("picked dir")))
+    window = MainWindow(AppController(cloud_client=None))
+    window._on_save_stl()
+    assert seen.get("info") is True
+
+
+def test_stl_export_worker_writes_one_file_per_visible_label(qapp, tmp_path):
+    from stomcore.mask import LabelInfo, SegmentationMask
+    from stomclient.ui.main_window import _StlExportWorker
+
+    labels = np.zeros((5, 5, 5), dtype=np.uint8)
+    labels[1, 1, 1] = 3
+    labels[3, 3, 3] = 4
+    geo = Geometry.identity((0.3, 0.3, 0.3))
+    mask = SegmentationMask(labels, geo,
+                            {3: LabelInfo(3, "Upper Teeth", (1, 1, 1)),
+                             4: LabelInfo(4, "Lower Teeth", (2, 2, 2))})
+    worker = _StlExportWorker(mask, tmp_path, [3, 4])
+    result = {}
+    worker.done.connect(lambda count, folder: result.update(count=count, folder=folder))
+    worker.run()  # synchronous: signals deliver directly on this thread
+    assert result["count"] == 2
+    assert sorted(p.name for p in tmp_path.glob("*.stl")) == [
+        "03_Upper_Teeth.stl", "04_Lower_Teeth.stl"]
+
+
 def test_main_window_segment_guard_when_thread_running(qapp):
     from stomclient.ui.main_window import MainWindow
 

@@ -91,6 +91,31 @@ class _FnWorker(QObject):
             self.done.emit(None)
 
 
+class _StlExportWorker(QObject):
+    """Meshes the chosen labels and writes one STL each, off the UI thread."""
+    progress = Signal(int, int, str)  # (labels_done, labels_total, current name)
+    done = Signal(int, str)           # (files_written, out_dir)
+    failed = Signal(str)
+
+    def __init__(self, mask, out_dir: Path, label_ids: list[int]) -> None:
+        super().__init__()
+        self._mask = mask
+        self._out_dir = out_dir
+        self._label_ids = label_ids
+
+    def run(self) -> None:
+        from stomcore.stl_export import export_labels_stl
+
+        try:
+            written = export_labels_stl(
+                self._mask, self._out_dir, self._label_ids,
+                progress=lambda d, t, n: self.progress.emit(d, t, n),
+            )
+            self.done.emit(len(written), str(self._out_dir))
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit(str(exc))
+
+
 class _DownloadWorker(QObject):
     """Downloads the client installer off the UI thread."""
     progress = Signal(int, int)
@@ -185,6 +210,8 @@ class MainWindow(QMainWindow):
         png_btn.clicked.connect(self._on_save_png)
         mask_btn = QPushButton(S.BTN["save_mask"])
         mask_btn.clicked.connect(self._on_save_mask)
+        stl_btn = QPushButton(S.BTN["save_stl"])
+        stl_btn.clicked.connect(self._on_save_stl)
 
         self.mask_list = QListWidget()
         self.mask_list.itemChanged.connect(self._on_mask_item_changed)
@@ -201,7 +228,7 @@ class MainWindow(QMainWindow):
         for w in (self._plane, self._measure_btn, clear_btn):
             left.addWidget(w)
         left.addWidget(_section(S.SECTION["export"]))
-        for w in (png_btn, mask_btn):
+        for w in (png_btn, mask_btn, stl_btn):
             left.addWidget(w)
         left.addWidget(_section(S.SECTION["masks"]))
         left.addWidget(self.mask_list)
@@ -231,6 +258,8 @@ class MainWindow(QMainWindow):
         self._check_threads: list[QThread] = []
         self._dl_thread: QThread | None = None
         self._dl_progress: QProgressDialog | None = None
+        self._stl_thread: QThread | None = None
+        self._stl_progress: QProgressDialog | None = None
 
     def refresh(self) -> None:
         self._status.setText(S.STATUS.get(self._c.state, self._c.state.value))
@@ -291,6 +320,62 @@ class MainWindow(QMainWindow):
         if path:
             labels_path = path.replace(".nii.gz", "").rstrip(".") + "_labels.json"
             save_mask_nifti(self._c.mask, path, labels_path)
+
+    def _on_save_stl(self) -> None:
+        if self._c.mask is None:
+            QMessageBox.information(self, S.MSG["no_mask_title"], S.MSG["no_mask_body"])
+            return
+        if self._stl_thread is not None and self._stl_thread.isRunning():
+            return
+        # Export the structures the user currently has visible (checked); if none
+        # are visible, fall back to every label present in the mask.
+        present = self._c.mask.present_labels()
+        visible = {lid for lid, info in self._c.mask.label_map.items()
+                   if info.visible and lid in present}
+        label_ids = sorted(visible) if visible else sorted(present)
+        if not label_ids:
+            QMessageBox.information(self, S.MSG["stl_empty_title"], S.MSG["stl_empty_body"])
+            return
+        out_dir = QFileDialog.getExistingDirectory(self, S.BTN["save_stl"])
+        if not out_dir:
+            return
+
+        self._stl_progress = QProgressDialog(
+            S.MSG["stl_progress"], None, 0, len(label_ids), self
+        )
+        self._stl_progress.setWindowTitle(S.MSG["stl_title"])
+        self._stl_progress.setWindowModality(Qt.WindowModality.WindowModal)
+        self._stl_progress.setMinimumDuration(0)
+        self._stl_progress.setValue(0)
+
+        self._stl_thread = QThread(self)
+        worker = _StlExportWorker(self._c.mask, Path(out_dir), label_ids)
+        worker.moveToThread(self._stl_thread)
+        self._stl_thread.started.connect(worker.run)
+        worker.progress.connect(self._on_stl_progress)
+        worker.done.connect(self._on_stl_done)
+        worker.failed.connect(self._on_stl_failed)
+        worker.done.connect(self._stl_thread.quit)
+        worker.failed.connect(self._stl_thread.quit)
+        self._stl_worker = worker
+        self._stl_thread.start()
+
+    def _on_stl_progress(self, done: int, total: int, name: str) -> None:
+        if self._stl_progress is not None:
+            self._stl_progress.setValue(done)
+
+    def _on_stl_done(self, count: int, folder: str) -> None:
+        if self._stl_progress is not None:
+            self._stl_progress.reset()
+        QMessageBox.information(
+            self, S.MSG["stl_done_title"],
+            S.MSG["stl_done_body"].format(count=count, folder=folder),
+        )
+
+    def _on_stl_failed(self, message: str) -> None:
+        if self._stl_progress is not None:
+            self._stl_progress.reset()
+        QMessageBox.critical(self, S.MSG["stl_failed_title"], message)
 
     def _on_settings(self) -> None:
         dialog = SettingsDialog(self._config, self)

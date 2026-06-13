@@ -97,11 +97,13 @@ class _StlExportWorker(QObject):
     done = Signal(int, str)           # (files_written, out_dir)
     failed = Signal(str)
 
-    def __init__(self, mask, out_dir: Path, label_ids: list[int]) -> None:
+    def __init__(self, mask, out_dir: Path, label_ids: list[int],
+                 smooth_iterations: int = 0) -> None:
         super().__init__()
         self._mask = mask
         self._out_dir = out_dir
         self._label_ids = label_ids
+        self._smooth_iterations = smooth_iterations
 
     def run(self) -> None:
         from stomcore.stl_export import export_labels_stl
@@ -109,6 +111,7 @@ class _StlExportWorker(QObject):
         try:
             written = export_labels_stl(
                 self._mask, self._out_dir, self._label_ids,
+                smooth_iterations=self._smooth_iterations,
                 progress=lambda d, t, n: self.progress.emit(d, t, n),
             )
             self.done.emit(len(written), str(self._out_dir))
@@ -212,6 +215,8 @@ class MainWindow(QMainWindow):
         mask_btn.clicked.connect(self._on_save_mask)
         stl_btn = QPushButton(S.BTN["save_stl"])
         stl_btn.clicked.connect(self._on_save_stl)
+        self._stl_smooth_chk = QCheckBox(S.BTN["stl_smooth"])
+        self._stl_smooth_chk.setChecked(True)  # smoothed surface by default
 
         self.mask_list = QListWidget()
         self.mask_list.itemChanged.connect(self._on_mask_item_changed)
@@ -228,7 +233,7 @@ class MainWindow(QMainWindow):
         for w in (self._plane, self._measure_btn, clear_btn):
             left.addWidget(w)
         left.addWidget(_section(S.SECTION["export"]))
-        for w in (png_btn, mask_btn, stl_btn):
+        for w in (png_btn, mask_btn, stl_btn, self._stl_smooth_chk):
             left.addWidget(w)
         left.addWidget(_section(S.SECTION["masks"]))
         left.addWidget(self.mask_list)
@@ -348,8 +353,9 @@ class MainWindow(QMainWindow):
         self._stl_progress.setMinimumDuration(0)
         self._stl_progress.setValue(0)
 
+        smooth_iterations = 12 if self._stl_smooth_chk.isChecked() else 0
         self._stl_thread = QThread(self)
-        worker = _StlExportWorker(self._c.mask, Path(out_dir), label_ids)
+        worker = _StlExportWorker(self._c.mask, Path(out_dir), label_ids, smooth_iterations)
         worker.moveToThread(self._stl_thread)
         self._stl_thread.started.connect(worker.run)
         worker.progress.connect(self._on_stl_progress)

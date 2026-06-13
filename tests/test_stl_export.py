@@ -10,8 +10,27 @@ from stomcore.stl_export import (
     export_labels_stl,
     index_to_world,
     label_to_stl,
+    smooth_taubin,
+    weld_mesh,
     write_binary_stl,
 )
+
+
+def _sphere_mask(n=24, r=8):
+    zz, yy, xx = np.mgrid[0:n, 0:n, 0:n]
+    c = n / 2
+    labels = np.zeros((n, n, n), dtype=np.uint8)
+    labels[(xx - c) ** 2 + (yy - c) ** 2 + (zz - c) ** 2 < r ** 2] = 1
+    return labels
+
+
+def _edge_share_counts(faces):
+    counts = {}
+    for tri in faces:
+        a, b, c = tri
+        for u, w in ((a, b), (b, c), (c, a)):
+            counts[(min(u, w), max(u, w))] = counts.get((min(u, w), max(u, w)), 0) + 1
+    return counts
 
 
 def _solid_cube(n: int = 1) -> np.ndarray:
@@ -159,6 +178,73 @@ def test_export_labels_respects_explicit_id_filter(tmp_path):
     )
     written = export_labels_stl(mask, tmp_path, label_ids=[4])
     assert [p.name for p in written] == ["04_B.stl"]
+
+
+def test_weld_mesh_shares_vertices_and_keeps_topology():
+    verts, faces = binary_to_mesh(_solid_cube(2))
+    wv, wf = weld_mesh(verts, faces)
+    assert len(wv) < len(verts)                       # coincident corners merged
+    assert wf.shape == faces.shape
+    # Welded surface is watertight: every edge shared by exactly two triangles.
+    counts = _edge_share_counts(wf)
+    assert counts and all(v == 2 for v in counts.values())
+    # Indices stay in range and the rounded coordinate set is unchanged.
+    assert wf.max() < len(wv)
+    assert {tuple(np.round(v, 3)) for v in wv} == {tuple(np.round(v, 3)) for v in verts}
+
+
+def test_smooth_reduces_facet_normal_variance_but_keeps_watertight():
+    verts, faces = weld_mesh(*binary_to_mesh(_sphere_mask()))
+
+    def normal_spread(v):
+        tris = v[faces]
+        n = np.cross(tris[:, 1] - tris[:, 0], tris[:, 2] - tris[:, 0])
+        n /= np.linalg.norm(n, axis=1, keepdims=True) + 1e-12
+        return float(np.var(n, axis=0).sum())
+
+    smoothed = smooth_taubin(verts.astype(float), faces, iterations=12)
+    assert smoothed.shape == verts.shape
+    assert normal_spread(smoothed) < normal_spread(verts.astype(float))  # rounder
+    # Faces untouched -> still watertight after smoothing.
+    counts = _edge_share_counts(faces)
+    assert all(v == 2 for v in counts.values())
+
+
+def test_smoothing_preserves_overall_size_no_collapse():
+    # Taubin must not shrink the sphere to a point (pure Laplacian would).
+    verts, faces = weld_mesh(*binary_to_mesh(_sphere_mask(n=24, r=8)))
+    verts = verts.astype(float)
+    before = verts.max(axis=0) - verts.min(axis=0)
+    after_v = smooth_taubin(verts, faces, iterations=12)
+    after = after_v.max(axis=0) - after_v.min(axis=0)
+    assert np.all(after > before * 0.8)               # keeps >80% of its extent
+
+
+def test_smooth_iterations_zero_is_voxel_exact(tmp_path):
+    mask = SegmentationMask(_sphere_mask().astype(np.uint8),
+                            Geometry.identity((0.4, 0.4, 0.4)),
+                            {1: LabelInfo(1, "tooth", (1, 1, 1))})
+    raw = tmp_path / "raw.stl"
+    label_to_stl(mask, 1, raw, smooth_iterations=0)
+    verts, _ = binary_to_mesh(_sphere_mask().astype(bool))
+    count, _ = _read_stl(raw)
+    assert count == len(binary_to_mesh(_sphere_mask().astype(bool))[1])  # unchanged soup
+
+
+def test_label_to_stl_smoothing_moves_vertices(tmp_path):
+    mask = SegmentationMask(_sphere_mask().astype(np.uint8),
+                            Geometry.identity((0.4, 0.4, 0.4)),
+                            {1: LabelInfo(1, "tooth", (1, 1, 1))})
+    raw, smooth = tmp_path / "raw.stl", tmp_path / "smooth.stl"
+    label_to_stl(mask, 1, raw, smooth_iterations=0)
+    label_to_stl(mask, 1, smooth, smooth_iterations=12)
+    _, raw_tris = _read_stl(raw)
+    _, smooth_tris = _read_stl(smooth)
+    raw_pts = np.array([p for t in raw_tris for p in t])
+    smooth_pts = np.array([p for t in smooth_tris for p in t])
+    # Both describe the same sphere but the smoothed surface is geometrically different.
+    assert not np.allclose(np.sort(raw_pts, axis=0)[:100],
+                           np.sort(smooth_pts, axis=0)[:100])
 
 
 def test_cyrillic_label_name_yields_usable_filename(tmp_path):

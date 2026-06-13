@@ -115,13 +115,20 @@ def test_stl_export_worker_writes_one_file_per_visible_label(qapp, tmp_path):
     mask = SegmentationMask(labels, geo,
                             {3: LabelInfo(3, "Upper Teeth", (1, 1, 1)),
                              4: LabelInfo(4, "Lower Teeth", (2, 2, 2))})
-    worker = _StlExportWorker(mask, tmp_path, [3, 4])
+    worker = _StlExportWorker(mask, tmp_path, [3, 4], 12)  # smoothing on
     result = {}
     worker.done.connect(lambda count, folder: result.update(count=count, folder=folder))
     worker.run()  # synchronous: signals deliver directly on this thread
     assert result["count"] == 2
     assert sorted(p.name for p in tmp_path.glob("*.stl")) == [
         "03_Upper_Teeth.stl", "04_Lower_Teeth.stl"]
+
+
+def test_stl_smoothing_checkbox_defaults_on(qapp):
+    from stomclient.ui.main_window import MainWindow
+
+    window = MainWindow(AppController(cloud_client=None))
+    assert window._stl_smooth_chk.isChecked() is True
 
 
 def test_main_window_segment_guard_when_thread_running(qapp):

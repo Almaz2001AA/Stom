@@ -94,6 +94,66 @@ def binary_to_mesh(solid: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return np.concatenate(verts_parts), np.concatenate(faces_parts)
 
 
+def weld_mesh(verts: np.ndarray, faces: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Merge coincident vertices of a triangle soup into a shared-vertex mesh.
+
+    :func:`binary_to_mesh` emits a soup (4 unshared vertices per face); welding
+    builds the vertex connectivity that smoothing needs. Corner coordinates are
+    exact half-integers, so rounding before the unique is just defensive.
+    """
+    if len(verts) == 0:
+        return verts, faces
+    key = np.round(np.asarray(verts, dtype=np.float64), 6)
+    uniq, inv = np.unique(key, axis=0, return_inverse=True)
+    return uniq, inv[np.asarray(faces)]
+
+
+def _unique_edges(faces: np.ndarray) -> np.ndarray:
+    """Undirected unique edges ``(E, 2)`` of a shared-vertex triangle mesh."""
+    e = np.concatenate([faces[:, [0, 1]], faces[:, [1, 2]], faces[:, [2, 0]]], axis=0)
+    return np.unique(np.sort(e, axis=1), axis=0)
+
+
+def smooth_taubin(
+    verts: np.ndarray,
+    faces: np.ndarray,
+    *,
+    iterations: int = 12,
+    lamb: float = 0.5,
+    mu: float = -0.53,
+) -> np.ndarray:
+    """Taubin (λ|μ) smoothing of a shared-vertex mesh; returns moved vertices.
+
+    Each iteration is a Laplacian shrinking pass (``+lamb``) followed by an
+    inflating pass (``+mu``, μ<0); the pair largely cancels volume loss, so a
+    tooth keeps its size while the voxel stair-steps melt away. ``faces`` are
+    unchanged — only vertex positions move, so the surface stays watertight.
+    Operate in whatever space the caller passes (we use physical mm so the
+    smoothing radius is isotropic regardless of slice spacing).
+    """
+    verts = np.asarray(verts, dtype=np.float64)
+    if iterations <= 0 or len(verts) == 0 or np.asarray(faces).size == 0:
+        return verts
+    verts = verts.copy()
+    edges = _unique_edges(np.asarray(faces))
+    a, b = edges[:, 0], edges[:, 1]
+    deg = np.zeros(len(verts))
+    np.add.at(deg, a, 1.0)
+    np.add.at(deg, b, 1.0)
+    deg[deg == 0] = 1.0  # isolated vertices never move
+
+    def _pass(v: np.ndarray, factor: float) -> np.ndarray:
+        nbr_sum = np.zeros_like(v)
+        np.add.at(nbr_sum, a, v[b])
+        np.add.at(nbr_sum, b, v[a])
+        return v + factor * (nbr_sum / deg[:, None] - v)
+
+    for _ in range(iterations):
+        verts = _pass(verts, lamb)
+        verts = _pass(verts, mu)
+    return verts
+
+
 def index_to_world(verts_xyz: np.ndarray, geometry: Geometry) -> np.ndarray:
     """Map continuous ``(x, y, z)`` voxel indices to physical mm (ITK convention).
 
@@ -155,11 +215,19 @@ def write_binary_stl(path: str | Path, verts_world: np.ndarray, faces: np.ndarra
         f.write(rows.tobytes())
 
 
-def label_to_stl(mask: SegmentationMask, label_id: int, path: str | Path) -> int:
+def label_to_stl(
+    mask: SegmentationMask,
+    label_id: int,
+    path: str | Path,
+    *,
+    smooth_iterations: int = 0,
+) -> int:
     """Write label ``label_id`` of ``mask`` to ``path`` as STL; return triangle count.
 
     The label is cropped to its bounding box before meshing so a single tooth in
     a full-CBCT mask costs only its own voxels, not the whole volume.
+    ``smooth_iterations`` > 0 welds the surface and applies that many Taubin
+    passes (in mm) to round off the voxel stair-steps; 0 keeps it voxel-exact.
     """
     solid = mask.labels == label_id
     located = np.argwhere(solid)
@@ -172,8 +240,12 @@ def label_to_stl(mask: SegmentationMask, label_id: int, path: str | Path) -> int
 
     verts, faces = binary_to_mesh(sub)
     verts += lo[::-1]  # crop offset, (z, y, x) lo -> (x, y, z) vertex frame
+    if smooth_iterations > 0:
+        verts, faces = weld_mesh(verts, faces)
     faces = _orient_outward(verts, faces, mask.geometry)
     world = index_to_world(verts, mask.geometry)
+    if smooth_iterations > 0:
+        world = smooth_taubin(world, faces, iterations=smooth_iterations)
     write_binary_stl(path, world, faces)
     return len(faces)
 
@@ -188,13 +260,15 @@ def export_labels_stl(
     out_dir: str | Path,
     label_ids: list[int] | None = None,
     *,
+    smooth_iterations: int = 0,
     progress=None,
 ) -> list[Path]:
     """Write one STL per label into ``out_dir``; return the files written.
 
     ``label_ids`` defaults to every label actually present in the mask. Empty
-    labels are skipped. ``progress(done, total, name)`` is called per label so a
-    UI can report which structure is being exported.
+    labels are skipped. ``smooth_iterations`` rounds off the voxel surface (see
+    :func:`label_to_stl`). ``progress(done, total, name)`` is called per label so
+    a UI can report which structure is being exported.
     """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -208,7 +282,7 @@ def export_labels_stl(
         if progress is not None:
             progress(i, len(ids), name)
         dest = out_dir / _safe_filename(label_id, name)
-        if label_to_stl(mask, label_id, dest) > 0:
+        if label_to_stl(mask, label_id, dest, smooth_iterations=smooth_iterations) > 0:
             written.append(dest)
     if progress is not None:
         progress(len(ids), len(ids), "")

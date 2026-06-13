@@ -64,6 +64,22 @@ def find_engine_exe(root: Path | None = None) -> Path | None:
     return None
 
 
+def read_marker(root: Path | None = None) -> dict:
+    """The unpacked engine-pack's install record ``{"version", "sha256"}``.
+
+    Returns ``{}`` when no marker exists (nothing installed, or a pre-versioning
+    install) or it is unreadable.
+    """
+    marker = (root or engine_dir()) / MARKER_NAME
+    if not marker.exists():
+        return {}
+    try:
+        data = json.loads(marker.read_text())
+        return data if isinstance(data, dict) else {}
+    except (ValueError, OSError):
+        return {}
+
+
 def installed_version(root: Path | None = None) -> str | None:
     """Version of the unpacked engine-pack, or None if unknown/not installed.
 
@@ -71,13 +87,7 @@ def installed_version(root: Path | None = None) -> str | None:
     pre-versioning install (e.g. the broken v0.1.2/v0.1.3 pack). Callers pair this
     with :func:`find_engine_exe` to tell "nothing installed" from "legacy install".
     """
-    marker = (root or engine_dir()) / MARKER_NAME
-    if not marker.exists():
-        return None
-    try:
-        return json.loads(marker.read_text()).get("version")
-    except (ValueError, OSError):
-        return None
+    return read_marker(root).get("version")
 
 
 def _write_marker(version: str | None, sha256: str | None, root: Path) -> None:
@@ -89,18 +99,31 @@ def _write_marker(version: str | None, sha256: str | None, root: Path) -> None:
 
 
 def engine_update_available(manifest: dict, root: Path | None = None) -> bool:
-    """Whether the installed engine-pack differs from ``manifest``'s version.
+    """Whether the installed engine-pack is stale relative to ``manifest``.
 
-    True when a pack is installed but its version differs from the manifest, or
-    when an engine exe is present without a version marker (legacy/broken pack —
-    e.g. the user's v0.1.3 install that hangs on freeze_support). False when
+    Freshness is judged by the pack's *content*, not just its version string:
+    when both the install record and the manifest carry a SHA-256 we compare
+    those, so a republished pack with the same version still registers as an
+    update (and an identical pack never falsely does). We fall back to the
+    version string only when a checksum isn't available on both sides.
+
+    True when a pack is installed but its checksum/version differs from the
+    manifest, or when an engine exe is present without a marker (legacy/broken
+    pack — e.g. the v0.1.3 install that hangs on freeze_support). False when
     nothing is installed at all (that is the *install* flow, not an update).
     """
     root = root or engine_dir()
-    current = installed_version(root)
-    if current is None:
-        return find_engine_exe(root) is not None
-    return current != manifest.get("version")
+    if find_engine_exe(root) is None:
+        return False  # nothing installed -> install flow, not an update
+    marker = read_marker(root)
+    if not marker:
+        return True  # exe present but no marker -> legacy/broken pack, update it
+
+    man_sha = (manifest.get("sha256") or "").lower()
+    cur_sha = (marker.get("sha256") or "").lower()
+    if man_sha and cur_sha:
+        return man_sha != cur_sha
+    return marker.get("version") != manifest.get("version")
 
 
 def _sha256(path: Path) -> str:

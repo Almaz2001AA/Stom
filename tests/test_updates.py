@@ -79,6 +79,12 @@ def test_check_for_update_none_when_current(monkeypatch):
     assert check_for_client_update(opener=_opener_for(_release_json("v0.1.5"))) is None
 
 
+def test_check_for_update_quiet_when_own_version_unknown(monkeypatch):
+    # A frozen build missing its metadata reads as "0"; it must NOT nag forever.
+    monkeypatch.setattr(updates, "current_version", lambda: "0")
+    assert check_for_client_update(opener=_opener_for(_release_json("v0.2.0"))) is None
+
+
 def test_check_for_update_swallows_network_errors():
     def _boom(url):
         raise OSError("offline")

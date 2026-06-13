@@ -155,6 +155,22 @@ def test_update_not_available_when_nothing_installed(tmp_path):
     assert engine_update_available({"version": "v0.1.4"}, tmp_path / "empty") is False
 
 
+def test_update_uses_sha256_over_version_string(tmp_path):
+    # A republished pack: same version, different content -> still an update.
+    data = _make_pack(nested=True)
+    root = tmp_path / "root"
+    cur_sha = hashlib.sha256(data).hexdigest()
+    provision({"url": "http://x/e.zip", "version": "v0.2.0", "sha256": cur_sha},
+              opener=_opener_for(data), root=root)
+    assert engine_update_available(
+        {"version": "v0.2.0", "sha256": "different" + cur_sha[9:]}, root) is True
+    assert engine_update_available(
+        {"version": "v0.2.0", "sha256": cur_sha}, root) is False
+    # Same content but a bumped version label -> identical sha, no false update.
+    assert engine_update_available(
+        {"version": "v0.2.1", "sha256": cur_sha}, root) is False
+
+
 def test_clean_install_removes_stale_files(tmp_path):
     root = tmp_path / "root"
     root.mkdir()

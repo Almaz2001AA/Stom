@@ -1,8 +1,12 @@
+from importlib.metadata import version
+
 import stomcore
 
 
 def test_version_is_exposed():
-    assert stomcore.__version__ == "0.1.0"
+    # The baked-in fallback must match the installed package metadata so the
+    # client never misreports its version (and nags about phantom updates).
+    assert stomcore.__version__ == version("stomcore")
 
 
 def test_public_types_are_reexported():

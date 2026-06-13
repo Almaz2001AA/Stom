@@ -24,11 +24,23 @@ INSTALLER_NAME = "StomClientSetup.exe"
 
 
 def current_version() -> str:
-    """This client's version, from the installed ``stomcore`` package metadata."""
+    """This client's version.
+
+    Primary source is the installed ``stomcore`` package metadata. In a frozen
+    PyInstaller build that metadata is bundled via ``copy_metadata`` (see
+    ``packaging/stom-client.spec``); should it ever be missing we fall back to the
+    baked-in ``stomcore.__version__`` rather than ``"0"`` — a ``"0"`` here makes
+    every release look newer than us and nags the user to update on every launch.
+    """
     try:
         return version("stomcore")
-    except PackageNotFoundError:  # pragma: no cover - always installed in practice
-        return "0"
+    except PackageNotFoundError:  # pragma: no cover - metadata bundled in practice
+        try:
+            from stomcore import __version__
+
+            return __version__
+        except Exception:  # noqa: BLE001 - last-ditch; never break startup
+            return "0"
 
 
 def parse_version(tag: str) -> tuple[int, ...]:
@@ -79,8 +91,13 @@ def check_for_client_update(*, opener=urlopen) -> dict | None:
     Network-tolerant: any failure returns None so startup never blocks or errors.
     """
     try:
+        current = current_version()
+        # If we cannot determine our own version, stay quiet rather than nag: a
+        # bogus low version would make every release look like an update forever.
+        if parse_version(current) <= (0,):
+            return None
         latest = fetch_latest_release(opener=opener)
-        if latest.get("url") and client_update_available(current_version(), latest["version"]):
+        if latest.get("url") and client_update_available(current, latest["version"]):
             return latest
     except Exception:  # noqa: BLE001 - update check must never break startup
         return None

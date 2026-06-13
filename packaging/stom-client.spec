@@ -1,6 +1,6 @@
 # PyInstaller spec for the Stom desktop client (built on Windows in CI).
 # One-folder build (COLLECT) — more reliable than one-file for PySide6 + SimpleITK.
-from PyInstaller.utils.hooks import collect_all
+from PyInstaller.utils.hooks import collect_all, copy_metadata
 
 datas, binaries, hiddenimports = [], [], []
 # Bundle the heavy native packages in full so the frozen app finds their data/DLLs.
@@ -11,6 +11,12 @@ for _pkg in ("SimpleITK", "PySide6"):
     hiddenimports += _h
 
 hiddenimports += ["stomcore", "stomclient", "stomengine"]
+
+# Bundle stomcore's package metadata so importlib.metadata.version("stomcore")
+# resolves inside the frozen app. Without it the version read falls back to "0",
+# which makes the auto-updater report a "new version" on every launch — even
+# straight after updating. See stomclient.updates.current_version().
+datas += copy_metadata("stomcore")
 
 # Keep the GUI installer slim: the on-device inference stack (torch + nnU-Net and
 # its transitive deps) is NOT bundled here. stomengine imports them lazily inside

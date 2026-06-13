@@ -12,7 +12,10 @@ from stomengine.runner import (  # noqa: F401
     DentalSegmentatorRunner,
     FakeRunner,
     SegmentationRunner,
+    denoise_labels,
     harmonize_to_model_domain,
+    min_component_mm3,
+    postprocess_enabled,
     tta_enabled,
 )
 
@@ -22,6 +25,9 @@ __all__ = [
     "DentalSegmentatorRunner",
     "FakeRunner",
     "SegmentationRunner",
+    "denoise_labels",
     "harmonize_to_model_domain",
+    "min_component_mm3",
+    "postprocess_enabled",
     "tta_enabled",
 ]

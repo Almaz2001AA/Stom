@@ -45,6 +45,68 @@ def num_threads(env: Mapping[str, str] | None = None) -> int:
         return int(raw)
     return os.cpu_count() or 1
 
+
+# Default smallest connected component (per label) kept by the denoise pass.
+# CBCT speckle is typically a handful of voxels (<2 mm³); real structures — even
+# a thin slice of the mandibular canal — form large connected runs, so 8 mm³
+# clears the noise with a wide safety margin. Tunable via STOM_MIN_COMPONENT_MM3.
+DEFAULT_MIN_COMPONENT_MM3 = 8.0
+
+
+def postprocess_enabled(env: Mapping[str, str] | None = None) -> bool:
+    """Whether to denoise the raw prediction. On unless ``STOM_DISABLE_POSTPROCESS``."""
+    env = os.environ if env is None else env
+    return env.get("STOM_DISABLE_POSTPROCESS", "").strip().lower() not in _TRUTHY_VALUES
+
+
+def min_component_mm3(env: Mapping[str, str] | None = None) -> float:
+    """Denoise volume threshold in mm³ (``STOM_MIN_COMPONENT_MM3`` or the default)."""
+    env = os.environ if env is None else env
+    raw = env.get("STOM_MIN_COMPONENT_MM3", "").strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        return DEFAULT_MIN_COMPONENT_MM3
+    return value if value >= 0 else DEFAULT_MIN_COMPONENT_MM3
+
+
+def denoise_labels(
+    labels: np.ndarray,
+    spacing: tuple[float, float, float],
+    *,
+    min_mm3: float = DEFAULT_MIN_COMPONENT_MM3,
+) -> np.ndarray:
+    """Drop small disconnected islands from a label volume — the main noise source.
+
+    The raw nnU-Net argmax scatters tiny false-positive blobs through the volume.
+    For each label we find 3-D connected components (26-neighbour) and zero out
+    any whose physical volume is below ``min_mm3``; real anatomy (teeth, jaws,
+    canal) forms components far larger than the threshold, so it is untouched.
+    ``min_mm3 <= 0`` disables the pass. Pure post-processing — no model needed.
+    """
+    if min_mm3 <= 0:
+        return labels
+    from scipy import ndimage  # engine dependency (pulled by nnU-Net/skimage)
+
+    voxel_mm3 = abs(float(spacing[0]) * float(spacing[1]) * float(spacing[2]))
+    if voxel_mm3 <= 0:
+        return labels
+    min_voxels = max(1, int(round(min_mm3 / voxel_mm3)))
+
+    cleaned = labels.copy()
+    structure = ndimage.generate_binary_structure(3, 3)  # full 26-connectivity
+    for value in np.unique(labels):
+        if value == 0:
+            continue
+        components, n = ndimage.label(labels == value, structure=structure)
+        if n == 0:
+            continue
+        counts = np.bincount(components.reshape(-1))
+        small = np.nonzero(counts[1:] < min_voxels)[0] + 1
+        if small.size:
+            cleaned[np.isin(components, small)] = 0
+    return cleaned
+
 # DentalSegmentator (Dataset112) foreground intensity stats, from the weights'
 # dataset_fingerprint.json. The model's CTNormalization assumes inputs live in
 # this CT/HU-like domain; CBCT with a different intensity calibration must be
@@ -238,4 +300,10 @@ class DentalSegmentatorRunner:
                 )
             result = sitk.ReadImage(str(out_trunc) + ".nii.gz")
             labels = sitk.GetArrayFromImage(result).astype(np.uint16)
-            return labels, geometry_from_sitk(result)
+            geometry = geometry_from_sitk(result)
+            # Denoise: drop the small false-positive islands nnU-Net scatters
+            # through the raw argmax (the dominant source of visible noise).
+            if postprocess_enabled():
+                labels = denoise_labels(labels, geometry.spacing,
+                                        min_mm3=min_component_mm3())
+            return labels, geometry

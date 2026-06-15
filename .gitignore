@@ -19,3 +19,7 @@ models/
 storage/
 a.png
 aa.png
+tf2_data/
+
+# patient CBCT archives (PHI — never commit; large)
+*.rar

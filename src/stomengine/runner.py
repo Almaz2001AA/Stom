@@ -70,6 +70,122 @@ def min_component_mm3(env: Mapping[str, str] | None = None) -> float:
     return value if value >= 0 else DEFAULT_MIN_COMPONENT_MM3
 
 
+def keep_largest_enabled(env: Mapping[str, str] | None = None) -> bool:
+    """Whether to keep only the largest component of single-structure labels.
+
+    **OFF by default** (opt in with ``STOM_ENABLE_KEEP_LARGEST``). Validated on a
+    real full-scan ToothFairy2 mask this proved unsafe: the raw model output is
+    fragmented (a molar's crown and roots disconnect, the mandibular canal breaks
+    into segments, the jawbone into chunks), so "largest only" deleted ~19% of
+    real anatomy (half of some molars, 75% of a canal). Kept as an opt-in tool for
+    clean masks, but never a default — fragmentation is a model-level issue that
+    deletion makes worse, not better.
+    """
+    env = os.environ if env is None else env
+    return env.get("STOM_ENABLE_KEEP_LARGEST", "").strip().lower() in _TRUTHY_VALUES
+
+
+def fill_holes_enabled(env: Mapping[str, str] | None = None) -> bool:
+    """Whether to fill fully-enclosed interior holes of single-structure labels.
+
+    On unless ``STOM_DISABLE_FILL_HOLES``. Uses a per-label fill that only closes
+    voids fully surrounded by that same label, so it cannot merge neighbouring
+    structures (each is its own label anyway).
+    """
+    env = os.environ if env is None else env
+    return env.get("STOM_DISABLE_FILL_HOLES", "").strip().lower() not in _TRUTHY_VALUES
+
+
+def keep_largest_component(
+    labels: np.ndarray, label_ids,
+) -> np.ndarray:
+    """Keep only the largest connected component of each given label.
+
+    For each id in ``label_ids`` the 3-D connected components (26-neighbour) are
+    found and all but the largest are zeroed — removing floating false-positive
+    fragments of a structure that is known to be a single connected piece. Labels
+    not in ``label_ids`` are untouched. A no-op for ids with 0/1 component.
+    """
+    ids = {int(v) for v in label_ids}
+    if not ids:
+        return labels
+    from scipy import ndimage  # engine dependency (pulled by nnU-Net/skimage)
+
+    structure = ndimage.generate_binary_structure(3, 3)  # full 26-connectivity
+    cleaned = labels.copy()
+    for value in ids:
+        mask = labels == value
+        if not mask.any():
+            continue
+        components, n = ndimage.label(mask, structure=structure)
+        if n <= 1:
+            continue
+        counts = np.bincount(components.reshape(-1))
+        counts[0] = 0  # background is not a component to keep
+        largest = int(counts.argmax())
+        cleaned[mask & (components != largest)] = 0
+    return cleaned
+
+
+def fill_label_holes(labels: np.ndarray, label_ids) -> np.ndarray:
+    """Fill fully-enclosed interior holes of each given label.
+
+    Per label, ``binary_fill_holes`` closes only background voxels completely
+    surrounded by that label (in 3-D), so a tooth's interior or a bone cavity is
+    solidified without touching other labels. Voxels added by the fill take the
+    label's id only where they were background, so existing labels are never
+    overwritten.
+    """
+    ids = {int(v) for v in label_ids}
+    if not ids:
+        return labels
+    from scipy import ndimage
+
+    out = labels.copy()
+    for value in ids:
+        mask = labels == value
+        if not mask.any():
+            continue
+        filled = ndimage.binary_fill_holes(mask)
+        # Only claim voxels that were background, so we never clobber a neighbour.
+        out[filled & (labels == 0)] = value
+    return out
+
+
+# Labels each model knows are a single connected anatomical piece, so keep-largest
+# and hole-fill are safe on them. Excluded on purpose: DentalSegmentator's teeth
+# blocks (3,4) and its single "Mandibular canal" label (5, covers BOTH canals);
+# ToothFairy2's bridge/crown/implant (8,9,10), which can be several pieces.
+DENTAL_SINGLE_COMPONENT_LABELS = frozenset({1, 2})  # Upper Skull, Mandible
+TF2_SINGLE_COMPONENT_LABELS = frozenset(
+    {1, 2, 3, 4, 5, 6, 7}  # jawbones, both canals, both sinuses, pharynx
+    | {q * 10 + p for q in (1, 2, 3, 4) for p in range(1, 9)}  # FDI teeth 11-48
+)
+
+
+def postprocess_labels(
+    labels: np.ndarray,
+    spacing: tuple[float, float, float],
+    *,
+    single_component_labels=(),
+) -> np.ndarray:
+    """Clean a raw argmax prediction: denoise, keep-largest, fill holes.
+
+    All steps are gated by ``STOM_DISABLE_POSTPROCESS`` (whole pass) and their own
+    toggles. Keep-largest and hole-fill apply only to ``single_component_labels``
+    (the model's known single-piece structures), so multi-piece labels are safe.
+    """
+    if not postprocess_enabled():
+        return labels
+    labels = denoise_labels(labels, spacing, min_mm3=min_component_mm3())
+    if single_component_labels:
+        if keep_largest_enabled():
+            labels = keep_largest_component(labels, single_component_labels)
+        if fill_holes_enabled():
+            labels = fill_label_holes(labels, single_component_labels)
+    return labels
+
+
 def denoise_labels(
     labels: np.ndarray,
     spacing: tuple[float, float, float],
@@ -301,11 +417,12 @@ class DentalSegmentatorRunner:
             result = sitk.ReadImage(str(out_trunc) + ".nii.gz")
             labels = sitk.GetArrayFromImage(result).astype(np.uint16)
             geometry = geometry_from_sitk(result)
-            # Denoise: drop the small false-positive islands nnU-Net scatters
-            # through the raw argmax (the dominant source of visible noise).
-            if postprocess_enabled():
-                labels = denoise_labels(labels, geometry.spacing,
-                                        min_mm3=min_component_mm3())
+            # Clean the raw argmax: drop small islands, keep the largest piece of
+            # single-structure labels (skull/mandible), fill enclosed voids.
+            labels = postprocess_labels(
+                labels, geometry.spacing,
+                single_component_labels=DENTAL_SINGLE_COMPONENT_LABELS,
+            )
             return labels, geometry
 
 
@@ -419,7 +536,10 @@ class ToothFairy2Runner:
 
         labels = labels.astype(np.uint16)
         geometry = volume.geometry
-        if postprocess_enabled():
-            labels = denoise_labels(labels, geometry.spacing,
-                                    min_mm3=min_component_mm3())
+        # Clean the raw argmax: drop small islands, keep the largest piece of each
+        # single-structure label (jaws, canals, sinuses, per-tooth), fill voids.
+        labels = postprocess_labels(
+            labels, geometry.spacing,
+            single_component_labels=TF2_SINGLE_COMPONENT_LABELS,
+        )
         return labels, geometry

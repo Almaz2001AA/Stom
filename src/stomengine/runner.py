@@ -307,3 +307,119 @@ class DentalSegmentatorRunner:
                 labels = denoise_labels(labels, geometry.spacing,
                                         min_mm3=min_component_mm3())
             return labels, geometry
+
+
+def clamp_air_padding(
+    voxels: np.ndarray, air_value: float = _AIR_THRESHOLD
+) -> np.ndarray:
+    """Clamp out-of-FOV padding to a typical air value for per-image ZScore.
+
+    ToothFairy2 normalises each image by its own mean/std (ZScoreNormalization),
+    so extreme scanner padding (e.g. ``-2048``) would skew those statistics.
+    Clamping everything below ``air_value`` up to it keeps the foreground stats
+    representative. Returns the array unchanged if nothing is below the floor.
+    """
+    if not np.any(voxels < air_value):
+        return voxels
+    out = voxels.copy()
+    out[out < air_value] = air_value
+    return out
+
+
+class ToothFairy2Runner:
+    """nnU-Net v2 runner for the 49-class ToothFairy2 per-tooth (FDI) model.
+
+    Differs from :class:`DentalSegmentatorRunner` in three ways: it uses
+    per-image ZScore normalisation (so the raw scan is fed as-is — only the
+    out-of-FOV air padding is clamped — instead of being harmonised to a fixed
+    HU domain), it loads ``checkpoint_best.pth``, and it exports through the
+    memory-frugal path in :mod:`stomengine.lowmem` because the 49-class logits
+    buffer is far too large (~13 GB) for nnU-Net's default float32 export on the
+    6-8 GB PCs we target. Set ``STOM_DISABLE_LOWMEM=1`` to force the in-RAM path.
+    """
+
+    def __init__(
+        self,
+        model_dir: str,
+        *,
+        use_tta: bool | None = None,
+        low_memory: bool | None = None,
+    ) -> None:
+        self._model_dir = model_dir
+        self._use_tta = tta_enabled() if use_tta is None else use_tta
+        self._low_memory = low_memory
+
+    def _build_predictor(self, low_memory: bool):
+        import torch
+        from nnunetv2.inference.predict_from_raw_data import nnUNetPredictor
+
+        kwargs = dict(
+            device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
+            use_mirroring=self._use_tta,
+            allow_tqdm=False,
+        )
+        if low_memory:
+            from .lowmem import MemmapLogitsPredictor
+
+            class _LowMemPredictor(MemmapLogitsPredictor, nnUNetPredictor):
+                pass
+
+            return _LowMemPredictor(**kwargs)
+        return nnUNetPredictor(**kwargs)
+
+    def predict(
+        self, volume: Volume, *, progress: ProgressCb | None = None
+    ) -> tuple[np.ndarray, Geometry]:
+        import tempfile
+        from pathlib import Path
+
+        import SimpleITK as sitk
+        import torch
+        from nnunetv2.imageio.simpleitk_reader_writer import SimpleITKIO
+        from nnunetv2.inference.data_iterators import PreprocessAdapterFromNpy
+
+        from stomcore.sitk_interop import sitk_from_volume
+
+        from .lowmem import logits_to_labels_lowmem, low_memory_enabled
+
+        torch.set_num_threads(num_threads())
+        low_memory = low_memory_enabled() if self._low_memory is None else self._low_memory
+
+        # Per-image ZScore: feed the raw scan, only clamping out-of-FOV padding.
+        clamped = Volume(clamp_air_padding(volume.voxels), volume.geometry)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            in_path = Path(tmp) / "case_0000.mha"
+            sitk.WriteImage(sitk_from_volume(clamped), str(in_path),
+                            useCompression=True)
+
+            predictor = self._build_predictor(low_memory)
+            if low_memory:
+                predictor.logits_memmap_dir = tmp
+            predictor.initialize_from_trained_model_folder(
+                self._model_dir,
+                use_folds=(0,),  # pretrained ToothFairy2 ships a single fold_0
+                checkpoint_name="checkpoint_best.pth",
+            )
+
+            # Replicate predict_single_npy_array up to the logits, then take the
+            # memory-frugal label export instead of nnU-Net's float32 one.
+            data, props = SimpleITKIO().read_images([str(in_path)])
+            ppa = PreprocessAdapterFromNpy(
+                [data], [None], [props], [None],
+                predictor.plans_manager, predictor.dataset_json,
+                predictor.configuration_manager,
+                num_threads_in_multithreaded=1, verbose=False,
+            )
+            dct = next(ppa)
+            with _tile_progress(progress):
+                logits = predictor.predict_logits_from_preprocessed_data(dct["data"])
+            labels = logits_to_labels_lowmem(predictor, logits, dct["data_properties"])
+            del logits  # release the (possibly memmap-backed) buffer before cleanup
+
+        labels = labels.astype(np.uint16)
+        geometry = volume.geometry
+        if postprocess_enabled():
+            labels = denoise_labels(labels, geometry.spacing,
+                                    min_mm3=min_component_mm3())
+        return labels, geometry

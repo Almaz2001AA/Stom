@@ -24,30 +24,53 @@ from stomcore.nifti_io import load_volume_nifti
 _MODEL_SUBPATH = Path("models") / "Dataset112_DentalSegmentator_v100" / (
     "nnUNetTrainer__nnUNetPlans__3d_fullres"
 )
+# Bundled location of the optional 49-class ToothFairy2 model (per-tooth FDI).
+_TF2_MODEL_SUBPATH = Path("models") / "Dataset112_ToothFairy2" / (
+    "nnUNetTrainer__nnUNetPlans__3d_fullres"
+)
 
 
-def resolve_model_dir() -> str:
+def selected_model(env=None) -> str:
+    """Which model to run: ``toothfairy2`` (49-class FDI) or the default."""
+    env = os.environ if env is None else env
+    value = env.get("STOM_MODEL", "").strip().lower()
+    return "toothfairy2" if value in {"toothfairy2", "tf2"} else "dentalsegmentator"
+
+
+def resolve_model_dir(model: str | None = None) -> str:
     """Locate the model weights: env override, else bundled next to the exe."""
     env = os.environ.get("STOM_MODEL_DIR")
     if env:
         return env
+    model = selected_model() if model is None else model
+    subpath = _TF2_MODEL_SUBPATH if model == "toothfairy2" else _MODEL_SUBPATH
     # PyInstaller unpacks bundled data under sys._MEIPASS; in source layout fall
     # back to the repo root (two levels up from this file: src/stomengine/..).
     base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[2]))
-    return str(base / _MODEL_SUBPATH)
+    return str(base / subpath)
 
 
 def _build_engine():
+    from .engine import InProcessEngine
+
     if os.environ.get("STOM_ENGINE_FAKE") == "1":
         # Test/smoke seam: exercise the subprocess wiring without the real model.
-        from .engine import InProcessEngine
         from .runner import FakeRunner
 
         return InProcessEngine(FakeRunner())
-    from .engine import InProcessEngine
+
+    model = selected_model()
+    if model == "toothfairy2":
+        from .runner import ToothFairy2Runner
+        from .tf2_labels import TOOTHFAIRY2_LABELS
+
+        return InProcessEngine(
+            ToothFairy2Runner(resolve_model_dir(model)), labels=TOOTHFAIRY2_LABELS
+        )
+
     from .runner import DentalSegmentatorRunner
 
-    return InProcessEngine(DentalSegmentatorRunner(resolve_model_dir()))
+    return InProcessEngine(DentalSegmentatorRunner(resolve_model_dir(model)))
 
 
 def _emit_progress(done: int, total: int) -> None:

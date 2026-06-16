@@ -64,8 +64,11 @@ class LocalEngine(Protocol):
 class InProcessEngine:
     """Run a :class:`SegmentationRunner` in this process and build the mask."""
 
-    def __init__(self, runner: SegmentationRunner) -> None:
+    def __init__(self, runner: SegmentationRunner, *, labels=None) -> None:
         self._runner = runner
+        # Which label map to attach to the mask; defaults to DentalSegmentator's
+        # 5 classes. ToothFairy2's 49-class map is passed in by the CLI.
+        self._labels = DENTALSEGMENTATOR_LABELS if labels is None else labels
 
     def segment(
         self, volume: Volume, *, progress: ProgressCb | None = None
@@ -76,7 +79,7 @@ class InProcessEngine:
             labels, geometry = self._runner.predict(volume)
         else:
             labels, geometry = self._runner.predict(volume, progress=progress)
-        mask = SegmentationMask(labels, geometry, DENTALSEGMENTATOR_LABELS)
+        mask = SegmentationMask(labels, geometry, self._labels)
         if not mask.is_compatible_with(volume):
             raise ValueError(
                 "predicted mask shape/geometry does not match input volume"

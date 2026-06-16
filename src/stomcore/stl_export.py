@@ -250,6 +250,23 @@ def label_to_stl(
     return len(faces)
 
 
+# FDI / ISO-3950 permanent-tooth numbering: quadrant (1-4, clockwise from the
+# patient's upper-right) times ten plus position (1 central incisor .. 8 third
+# molar). The per-tooth models (e.g. ToothFairy2) label teeth with exactly these
+# ids, so this set distinguishes individual teeth from anatomy in a model-agnostic
+# way (a coarse model with no per-tooth labels simply matches none of them).
+FDI_TOOTH_IDS = frozenset(
+    quadrant * 10 + position
+    for quadrant in (1, 2, 3, 4)
+    for position in range(1, 9)
+)
+
+
+def is_tooth_label(label_id: int) -> bool:
+    """True if ``label_id`` is an FDI permanent-tooth number (11-18/21-28/31-38/41-48)."""
+    return int(label_id) in FDI_TOOTH_IDS
+
+
 def _safe_filename(label_id: int, name: str) -> str:
     slug = re.sub(r"[^0-9A-Za-zА-Яа-яЁё]+", "_", name).strip("_") or "label"
     return f"{label_id:02d}_{slug}.stl"
@@ -287,3 +304,26 @@ def export_labels_stl(
     if progress is not None:
         progress(len(ids), len(ids), "")
     return written
+
+
+def export_teeth_stl(
+    mask: SegmentationMask,
+    out_dir: str | Path,
+    *,
+    smooth_iterations: int = 0,
+    progress=None,
+) -> list[Path]:
+    """Write one STL per individual tooth (FDI labels) present in ``mask``.
+
+    A focused :func:`export_labels_stl` that selects only the per-tooth FDI
+    labels (:data:`FDI_TOOTH_IDS`) — for printing a dental model without the
+    surrounding jawbone, sinuses, canals, etc. Each file is named by its FDI
+    number (e.g. ``16_Upper_Right_First_Molar.stl``). Returns the files written;
+    empty when the mask has no per-tooth labels (a coarse model that segments
+    teeth as a single block has none).
+    """
+    tooth_ids = sorted(lid for lid in mask.present_labels() if is_tooth_label(lid))
+    return export_labels_stl(
+        mask, out_dir, tooth_ids,
+        smooth_iterations=smooth_iterations, progress=progress,
+    )

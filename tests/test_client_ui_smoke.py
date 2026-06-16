@@ -131,6 +131,43 @@ def test_stl_smoothing_checkbox_defaults_on(qapp):
     assert window._stl_smooth_chk.isChecked() is True
 
 
+def test_stl_teeth_only_checkbox_defaults_off(qapp):
+    from stomclient.ui.main_window import MainWindow
+
+    window = MainWindow(AppController(cloud_client=None))
+    assert window._stl_teeth_only_chk.isChecked() is False
+
+
+def _mixed_tf2_mask():
+    from stomcore.mask import LabelInfo, SegmentationMask
+
+    geo = Geometry.identity((0.3, 0.3, 0.3))
+    labels = np.zeros((6, 6, 6), dtype=np.uint16)
+    labels[0, 0, 0] = 1    # Lower Jawbone (anatomy)
+    labels[2, 2, 2] = 16   # Upper Right First Molar (tooth)
+    labels[4, 4, 4] = 38   # Lower Left Third Molar (tooth)
+    label_map = {
+        1: LabelInfo(1, "Lower Jawbone", (1, 1, 1), True),
+        16: LabelInfo(16, "Upper Right First Molar", (2, 2, 2), True),
+        38: LabelInfo(38, "Lower Left Third Molar", (3, 3, 3), True),
+    }
+    return SegmentationMask(labels, geo, label_map)
+
+
+def test_stl_teeth_only_filters_to_fdi_teeth(qapp):
+    from stomclient.ui.main_window import MainWindow
+
+    controller = AppController(cloud_client=None)
+    controller.mask = _mixed_tf2_mask()
+    window = MainWindow(controller)
+
+    window._stl_teeth_only_chk.setChecked(False)
+    assert window._selected_stl_label_ids() == [1, 16, 38]  # all visible structures
+
+    window._stl_teeth_only_chk.setChecked(True)
+    assert window._selected_stl_label_ids() == [16, 38]  # anatomy (1) dropped
+
+
 def test_main_window_segment_guard_when_thread_running(qapp):
     from stomclient.ui.main_window import MainWindow
 

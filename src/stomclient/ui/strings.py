@@ -35,6 +35,7 @@ BTN = {
     "save_mask": "Сохранить маску…",
     "save_stl": "Экспорт в STL…",
     "stl_smooth": "Сглаживать поверхность",
+    "stl_teeth_only": "Только зубы",
 }
 
 # Plane names for the orientation combo (keys are the renderer's plane ids).

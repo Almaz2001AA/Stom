@@ -38,6 +38,12 @@ for _f in _MODEL_ROOT.rglob("*"):
         _dest = Path("models") / "Dataset112_DentalSegmentator_v100" / _rel
         datas.append((str(_f), str(_dest)))
 
+# Ship the attribution NOTICE alongside the weights (required by the model
+# licenses: CC BY 4.0 for DentalSegmentator, CC BY-SA 4.0 for ToothFairy2).
+_NOTICE = (Path(SPECPATH).parent / "NOTICE").resolve()
+if _NOTICE.is_file():
+    datas.append((str(_NOTICE), "."))
+
 a = Analysis(
     ["engine_launch.py"],
     pathex=[],

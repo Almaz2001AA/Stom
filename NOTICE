@@ -1,11 +1,54 @@
-This product uses the DentalSegmentator model and the nnU-Net framework.
+This product uses third-party segmentation models and the nnU-Net framework.
+Attribution is required by their licenses; this NOTICE must be distributed
+alongside the bundled model weights (e.g. inside the engine-pack).
 
-DentalSegmentator (pretrained nnU-Net v2 weights, CC-BY 4.0):
-  G. Dot et al., "DentalSegmentator: robust deep learning-based CBCT image
-  segmentation." Weights: https://zenodo.org/records/10829675
-
-nnU-Net:
+================================================================================
+nnU-Net (framework)
+================================================================================
   Isensee, F., et al. "nnU-Net: a self-configuring method for deep
   learning-based biomedical image segmentation." Nature Methods (2021).
 
-Used under the Creative Commons Attribution 4.0 International license.
+================================================================================
+DentalSegmentator model — Creative Commons Attribution 4.0 International (CC BY 4.0)
+================================================================================
+  DentalSegmentator (pretrained nnU-Net v2 weights):
+  G. Dot et al., "DentalSegmentator: robust deep learning-based CBCT image
+  segmentation." Weights: https://zenodo.org/records/10829675
+
+  Used under CC BY 4.0 — commercial use permitted with attribution.
+
+================================================================================
+ToothFairy2 model — Creative Commons Attribution-ShareAlike 4.0 (CC BY-SA 4.0)
+================================================================================
+  The optional per-tooth (49-class FDI) model is trained on the ToothFairy2
+  dataset. Both the dataset and the pretrained checkpoints are released by the
+  University of Modena and Reggio Emilia (with Radboud University) under the
+  Creative Commons Attribution-ShareAlike 4.0 International license (CC BY-SA 4.0).
+  Reference: https://ditto.ing.unimore.it/toothfairy2/
+  License text: https://creativecommons.org/licenses/by-sa/4.0/
+
+  ShareAlike notice: the bundled ToothFairy2 model weights are distributed under
+  CC BY-SA 4.0. You may use, modify, and redistribute these weights (and any
+  fine-tuned derivative of them) provided you keep this attribution and license
+  them under the same CC BY-SA 4.0 terms. This obligation applies to the weights
+  file; the surrounding Stom application code is a separate work.
+
+  Commercial use is permitted under CC BY-SA 4.0. (Note: the later ToothFairy3
+  dataset is CC BY-NC-SA — non-commercial — and is NOT used here.)
+
+  Required citations (per the dataset terms — cite all three):
+
+  [1] Bolelli, F., Lumetti, L., van Nistelrooij, N. et al.
+      "Multi-structure segmentation in CBCT volumes: The ToothFairy2 challenge."
+      Medical Image Analysis, 104095.
+      https://doi.org/10.1016/j.media.2026.104095
+
+  [2] Bolelli, F., Marchesini, K., van Nistelrooij, N., Lumetti, L., Pipoli, V.,
+      Ficarra, E., Vinayahalingam, S., & Grana, C. (2025).
+      "Segmenting Maxillofacial Structures in CBCT Volumes."
+      In: 2025 IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR).
+
+  [3] Lumetti, L., Pipoli, V., Bolelli, F., Ficarra, E., & Grana, C. (2024).
+      "Enhancing Patch-Based Learning for the Segmentation of the Mandibular Canal."
+      IEEE Access.
+      https://doi.org/10.1109/ACCESS.2024.3408629

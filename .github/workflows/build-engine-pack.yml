@@ -92,9 +92,10 @@ jobs:
           $sha = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
           $url = "https://github.com/${env:GITHUB_REPOSITORY}/releases/latest/download/$zip"
           # Record which models are bundled so the manifest is self-describing.
-          # ToothFairy2 is present only when its weights were fetched above.
+          # Detect ToothFairy2 from the source models/ tree the spec bundles from
+          # (robust: PyInstaller's onedir layout nests datas under _internal/).
           $models = @("dentalsegmentator")
-          if (Test-Path "packaging/dist/stom-engine/models/Dataset112_ToothFairy2/fold_0/checkpoint_best.pth") {
+          if (Test-Path "models/Dataset112_ToothFairy2/fold_0/checkpoint_best.pth") {
             $models += "toothfairy2"
           }
           @{ version = $version; url = $url; sha256 = $sha; models = $models } | ConvertTo-Json | Out-File -Encoding ascii engine-pack-manifest.json

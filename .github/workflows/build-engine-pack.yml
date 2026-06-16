@@ -8,6 +8,12 @@ name: build-engine-pack
 # REQUIRES repository variable WEIGHTS_URL: a direct download for the
 # DentalSegmentator weights archive (the Dataset112_* folder). The weights are
 # ~236 MB and are NOT committed to the repo.
+#
+# OPTIONAL repository variable TF2_WEIGHTS_URL: a direct download for the 49-class
+# ToothFairy2 per-tooth model archive (a top-level Dataset112_ToothFairy2/ folder,
+# flat nnU-Net layout). When set, the per-tooth model (~781 MB, CC BY-SA 4.0 — see
+# NOTICE) is bundled into the same pack and listed in the manifest's "models".
+# When unset, a DentalSegmentator-only pack is built (no size increase).
 
 on:
   push:
@@ -50,6 +56,29 @@ jobs:
             throw "Weights archive did not contain models/Dataset112_DentalSegmentator_v100"
           }
 
+      - name: Fetch ToothFairy2 weights (optional)
+        shell: pwsh
+        env:
+          TF2_WEIGHTS_URL: ${{ vars.TF2_WEIGHTS_URL }}
+        run: |
+          # Optional: when TF2_WEIGHTS_URL is set, bundle the 49-class per-tooth
+          # ToothFairy2 model too. The archive must contain a top-level
+          # Dataset112_ToothFairy2/ folder laid out as a flat nnU-Net model
+          # (dataset.json + plans.json + fold_0/checkpoint_best.pth). CC BY-SA 4.0
+          # (see NOTICE). Unset => DentalSegmentator-only pack (no 781 MB add).
+          if (-not $env:TF2_WEIGHTS_URL) {
+            Write-Host "TF2_WEIGHTS_URL not set - skipping ToothFairy2 (DentalSegmentator-only pack)."
+            exit 0
+          }
+          Invoke-WebRequest -Uri $env:TF2_WEIGHTS_URL -OutFile tf2-weights.zip
+          Expand-Archive -Path tf2-weights.zip -DestinationPath models -Force
+          if (-not (Test-Path "models/Dataset112_ToothFairy2/dataset.json")) {
+            throw "TF2 archive did not contain models/Dataset112_ToothFairy2/dataset.json (expected a flat nnU-Net model under Dataset112_ToothFairy2/)"
+          }
+          if (-not (Test-Path "models/Dataset112_ToothFairy2/fold_0/checkpoint_best.pth")) {
+            throw "TF2 archive missing models/Dataset112_ToothFairy2/fold_0/checkpoint_best.pth"
+          }
+
       - name: Build engine-pack with PyInstaller
         working-directory: packaging
         run: pyinstaller stom-engine.spec --noconfirm
@@ -62,7 +91,13 @@ jobs:
           Compress-Archive -Path packaging/dist/stom-engine/* -DestinationPath $zip -Force
           $sha = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
           $url = "https://github.com/${env:GITHUB_REPOSITORY}/releases/latest/download/$zip"
-          @{ version = $version; url = $url; sha256 = $sha } | ConvertTo-Json | Out-File -Encoding ascii engine-pack-manifest.json
+          # Record which models are bundled so the manifest is self-describing.
+          # ToothFairy2 is present only when its weights were fetched above.
+          $models = @("dentalsegmentator")
+          if (Test-Path "packaging/dist/stom-engine/models/Dataset112_ToothFairy2/fold_0/checkpoint_best.pth") {
+            $models += "toothfairy2"
+          }
+          @{ version = $version; url = $url; sha256 = $sha; models = $models } | ConvertTo-Json | Out-File -Encoding ascii engine-pack-manifest.json
           Get-Content engine-pack-manifest.json
 
       - name: Upload artifacts

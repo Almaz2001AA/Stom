@@ -38,6 +38,20 @@ for _f in _MODEL_ROOT.rglob("*"):
         _dest = Path("models") / "Dataset112_DentalSegmentator_v100" / _rel
         datas.append((str(_f), str(_dest)))
 
+# Optionally bundle the 49-class ToothFairy2 model (per-tooth FDI) when its
+# weights have been placed under models/Dataset112_ToothFairy2/ (the CI fetches
+# them when TF2_WEIGHTS_URL is set). Flat layout: dataset.json + plans.json +
+# fold_0/ directly inside, matching resolve_model_dir("toothfairy2"). Absent =
+# a DentalSegmentator-only pack, so the base build never requires the 781 MB
+# checkpoint.
+_TF2_ROOT = (Path(SPECPATH).parent / "models" / "Dataset112_ToothFairy2").resolve()
+if _TF2_ROOT.is_dir():
+    for _f in _TF2_ROOT.rglob("*"):
+        if _f.is_file() and "__MACOSX" not in str(_f) and not _f.name.startswith("._"):
+            _rel = _f.relative_to(_TF2_ROOT).parent
+            _dest = Path("models") / "Dataset112_ToothFairy2" / _rel
+            datas.append((str(_f), str(_dest)))
+
 # Ship the attribution NOTICE alongside the weights (required by the model
 # licenses: CC BY 4.0 for DentalSegmentator, CC BY-SA 4.0 for ToothFairy2).
 _NOTICE = (Path(SPECPATH).parent / "NOTICE").resolve()

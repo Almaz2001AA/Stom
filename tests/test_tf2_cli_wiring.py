@@ -24,7 +24,7 @@ def test_resolve_model_dir_picks_tf2_subpath(monkeypatch):
     monkeypatch.delenv("STOM_MODEL_DIR", raising=False)
     tf2 = Path(resolve_model_dir("toothfairy2"))
     default = Path(resolve_model_dir("dentalsegmentator"))
-    assert tf2.parts[-2] == "Dataset112_ToothFairy2"
+    assert tf2.parts[-1] == "Dataset112_ToothFairy2"  # flat model dir
     assert default.parts[-2] == "Dataset112_DentalSegmentator_v100"
 
 

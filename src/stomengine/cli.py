@@ -25,9 +25,9 @@ _MODEL_SUBPATH = Path("models") / "Dataset112_DentalSegmentator_v100" / (
     "nnUNetTrainer__nnUNetPlans__3d_fullres"
 )
 # Bundled location of the optional 49-class ToothFairy2 model (per-tooth FDI).
-_TF2_MODEL_SUBPATH = Path("models") / "Dataset112_ToothFairy2" / (
-    "nnUNetTrainer__nnUNetPlans__3d_fullres"
-)
+# Laid out flat (dataset.json + plans.json + fold_0/ directly inside), which is a
+# valid nnU-Net trained-model folder — matches how the weights archive is packed.
+_TF2_MODEL_SUBPATH = Path("models") / "Dataset112_ToothFairy2"
 
 
 def selected_model(env=None) -> str:

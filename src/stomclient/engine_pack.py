@@ -39,7 +39,13 @@ ProgressCb = Callable[[int, int], None]  # (bytes_done, bytes_total)
 
 
 def fetch_manifest(url: str = MANIFEST_URL, *, opener=urlopen) -> dict:
-    """Fetch the engine-pack manifest ``{"version", "url", "sha256"}``."""
+    """Fetch the engine-pack manifest ``{"version", "url", "sha256"}``.
+
+    May also carry an optional ``"models"`` list naming the segmentation models
+    bundled in the pack (e.g. ``["dentalsegmentator", "toothfairy2"]``); older
+    manifests omit it. Unknown keys are ignored, so this stays backward/forward
+    compatible.
+    """
     with opener(url) as resp:
         return json.loads(resp.read().decode("utf-8"))
 

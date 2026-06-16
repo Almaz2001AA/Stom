@@ -164,3 +164,51 @@ def test_keep_largest_and_fill_holes_env_toggles():
     assert keep_largest_enabled({"STOM_ENABLE_KEEP_LARGEST": "1"}) is True
     assert fill_holes_enabled({}) is True
     assert fill_holes_enabled({"STOM_DISABLE_FILL_HOLES": "yes"}) is False
+
+
+# --- per-class size cutoff (phantom-class removal) --------------------------
+
+def test_remove_undersized_classes_drops_only_phantoms():
+    from stomengine.runner import remove_undersized_classes
+
+    labels = np.zeros((20, 20, 20), dtype=np.uint16)
+    labels[2:12, 2:12, 2:12] = 16      # real "molar": 1000 voxels
+    labels[0:2, 0:2, 0:1] = 28         # phantom tooth: 4 voxels
+    # at 1 mm spacing: cutoff 20 mm³ -> drop the 4-voxel phantom, keep the molar.
+    out = remove_undersized_classes(labels, (1.0, 1.0, 1.0), {16: 20.0, 28: 20.0})
+    assert (out == 16).sum() == 1000   # real tooth untouched
+    assert (out == 28).sum() == 0      # phantom removed
+
+
+def test_remove_undersized_classes_ignores_zero_cutoff_and_absent():
+    from stomengine.runner import remove_undersized_classes
+
+    labels = np.zeros((10, 10, 10), dtype=np.uint16)
+    labels[0, 0, 0] = 1                 # tiny, but cutoff 0 -> never removed
+    out = remove_undersized_classes(labels, (1.0, 1.0, 1.0), {1: 0.0, 99: 50.0})
+    assert out[0, 0, 0] == 1
+
+
+def test_class_cutoff_env_toggles():
+    from stomengine.runner import (
+        DEFAULT_TOOTH_MIN_MM3, class_cutoff_enabled, tooth_min_mm3,
+    )
+
+    assert class_cutoff_enabled({}) is True
+    assert class_cutoff_enabled({"STOM_DISABLE_CLASS_CUTOFF": "1"}) is False
+    assert tooth_min_mm3({}) == DEFAULT_TOOTH_MIN_MM3
+    assert tooth_min_mm3({"STOM_TOOTH_MIN_MM3": "35"}) == 35.0
+    assert tooth_min_mm3({"STOM_TOOTH_MIN_MM3": "junk"}) == DEFAULT_TOOTH_MIN_MM3
+
+
+def test_postprocess_applies_class_cutoff():
+    from stomengine.runner import postprocess_labels
+
+    labels = np.zeros((20, 20, 20), dtype=np.uint16)
+    labels[2:12, 2:12, 2:12] = 16      # real molar
+    labels[0:3, 0:3, 0:2] = 28         # phantom tooth (18 voxels = 18 mm³ < 20)
+    out = postprocess_labels(
+        labels, (1.0, 1.0, 1.0), class_cutoffs={16: 20.0, 28: 20.0}
+    )
+    assert (out == 16).sum() == 1000
+    assert (out == 28).sum() == 0

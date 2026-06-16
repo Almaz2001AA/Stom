@@ -96,6 +96,58 @@ def fill_holes_enabled(env: Mapping[str, str] | None = None) -> bool:
     return env.get("STOM_DISABLE_FILL_HOLES", "").strip().lower() not in _TRUTHY_VALUES
 
 
+# Default minimum total volume for a per-tooth (FDI) class. A real tooth is
+# hundreds of mm³; a coherent blob below this is a phantom the model hallucinated
+# for a tooth that isn't there. Validated on a real ToothFairy2 scan: removes
+# phantom teeth (a "first molar" of 6 mm³, a "wisdom tooth" of 2.6 mm³) while the
+# smallest real tooth was orders of magnitude larger. Tunable via STOM_TOOTH_MIN_MM3.
+DEFAULT_TOOTH_MIN_MM3 = 20.0
+
+
+def class_cutoff_enabled(env: Mapping[str, str] | None = None) -> bool:
+    """Whether to drop whole under-sized phantom classes. On unless ``STOM_DISABLE_CLASS_CUTOFF``."""
+    env = os.environ if env is None else env
+    return env.get("STOM_DISABLE_CLASS_CUTOFF", "").strip().lower() not in _TRUTHY_VALUES
+
+
+def tooth_min_mm3(env: Mapping[str, str] | None = None) -> float:
+    """Per-tooth phantom cutoff in mm³ (``STOM_TOOTH_MIN_MM3`` or the default)."""
+    env = os.environ if env is None else env
+    raw = env.get("STOM_TOOTH_MIN_MM3", "").strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        return DEFAULT_TOOTH_MIN_MM3
+    return value if value >= 0 else DEFAULT_TOOTH_MIN_MM3
+
+
+def remove_undersized_classes(
+    labels: np.ndarray,
+    spacing: tuple[float, float, float],
+    min_mm3_by_label: Mapping[int, float],
+) -> np.ndarray:
+    """Drop a whole label whose TOTAL volume is below its cutoff (phantom class).
+
+    Complements the per-component denoise: that clears scattered islands, this
+    removes a coherent-but-spurious whole class the model hallucinated (e.g. a
+    phantom tooth where none exists). Mirrors the ToothFairy2 winning method's
+    per-class size cutoffs. A label with cutoff ``<= 0`` is never removed; a label
+    that is empty or already above its cutoff is untouched.
+    """
+    voxel_mm3 = abs(float(spacing[0]) * float(spacing[1]) * float(spacing[2]))
+    if voxel_mm3 <= 0:
+        return labels
+    out = labels.copy()
+    for value, cutoff in min_mm3_by_label.items():
+        if cutoff <= 0:
+            continue
+        mask = labels == value
+        volume = int(mask.sum()) * voxel_mm3
+        if 0 < volume < cutoff:
+            out[mask] = 0
+    return out
+
+
 def keep_largest_component(
     labels: np.ndarray, label_ids,
 ) -> np.ndarray:
@@ -157,9 +209,11 @@ def fill_label_holes(labels: np.ndarray, label_ids) -> np.ndarray:
 # blocks (3,4) and its single "Mandibular canal" label (5, covers BOTH canals);
 # ToothFairy2's bridge/crown/implant (8,9,10), which can be several pieces.
 DENTAL_SINGLE_COMPONENT_LABELS = frozenset({1, 2})  # Upper Skull, Mandible
+_TF2_TOOTH_IDS = frozenset(
+    q * 10 + p for q in (1, 2, 3, 4) for p in range(1, 9)  # FDI teeth 11-48
+)
 TF2_SINGLE_COMPONENT_LABELS = frozenset(
-    {1, 2, 3, 4, 5, 6, 7}  # jawbones, both canals, both sinuses, pharynx
-    | {q * 10 + p for q in (1, 2, 3, 4) for p in range(1, 9)}  # FDI teeth 11-48
+    {1, 2, 3, 4, 5, 6, 7} | _TF2_TOOTH_IDS  # jawbones, canals, sinuses, pharynx, teeth
 )
 
 
@@ -168,16 +222,21 @@ def postprocess_labels(
     spacing: tuple[float, float, float],
     *,
     single_component_labels=(),
+    class_cutoffs: Mapping[int, float] | None = None,
 ) -> np.ndarray:
-    """Clean a raw argmax prediction: denoise, keep-largest, fill holes.
+    """Clean a raw argmax prediction: denoise, drop phantom classes, fill holes.
 
     All steps are gated by ``STOM_DISABLE_POSTPROCESS`` (whole pass) and their own
-    toggles. Keep-largest and hole-fill apply only to ``single_component_labels``
-    (the model's known single-piece structures), so multi-piece labels are safe.
+    toggles. ``class_cutoffs`` (label -> min mm³) removes under-sized phantom whole
+    classes (e.g. a hallucinated tooth). Keep-largest (opt-in) and hole-fill apply
+    only to ``single_component_labels`` (the model's known single-piece structures),
+    so multi-piece labels are safe.
     """
     if not postprocess_enabled():
         return labels
     labels = denoise_labels(labels, spacing, min_mm3=min_component_mm3())
+    if class_cutoffs and class_cutoff_enabled():
+        labels = remove_undersized_classes(labels, spacing, class_cutoffs)
     if single_component_labels:
         if keep_largest_enabled():
             labels = keep_largest_component(labels, single_component_labels)
@@ -536,10 +595,13 @@ class ToothFairy2Runner:
 
         labels = labels.astype(np.uint16)
         geometry = volume.geometry
-        # Clean the raw argmax: drop small islands, keep the largest piece of each
-        # single-structure label (jaws, canals, sinuses, per-tooth), fill voids.
+        # Clean the raw argmax: drop small islands, remove phantom whole teeth
+        # (a coherent blob below the per-tooth volume cutoff), fill enclosed voids.
+        tooth_cutoff = tooth_min_mm3()
+        cutoffs = {fdi: tooth_cutoff for fdi in _TF2_TOOTH_IDS}
         labels = postprocess_labels(
             labels, geometry.spacing,
             single_component_labels=TF2_SINGLE_COMPONENT_LABELS,
+            class_cutoffs=cutoffs,
         )
         return labels, geometry

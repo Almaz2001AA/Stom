@@ -138,6 +138,22 @@ def test_stl_teeth_only_checkbox_defaults_off(qapp):
     assert window._stl_teeth_only_chk.isChecked() is False
 
 
+def test_model_combo_defaults_to_dental_and_switches_controller(qapp):
+    from stomclient.ui.main_window import MainWindow
+
+    controller = AppController(cloud_client=None)
+    window = MainWindow(controller)
+    # First item is the default (DentalSegmentator), carrying data None.
+    assert window._model_combo.currentData() is None
+    assert controller._model is None
+
+    # Selecting the ToothFairy2 item routes the choice to the controller.
+    tf2_index = window._model_combo.findData("toothfairy2")
+    assert tf2_index >= 0
+    window._model_combo.setCurrentIndex(tf2_index)
+    assert controller._model == "toothfairy2"
+
+
 def _mixed_tf2_mask():
     from stomcore.mask import LabelInfo, SegmentationMask
 

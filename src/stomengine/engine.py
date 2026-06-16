@@ -160,16 +160,25 @@ class SubprocessEngine:
         exe: str | os.PathLike | list[str],
         *,
         model_dir: str | None = None,
+        model: str | None = None,
         timeout: float | None = None,
         run=_stream_engine,
     ) -> None:
         # Accept a bare path or a full argv prefix (e.g. ["python", "-m", ...]).
         self._cmd = [str(exe)] if isinstance(exe, (str, os.PathLike)) else list(exe)
         self._model_dir = model_dir
+        # Which bundled model the engine should run ("toothfairy2" for per-tooth,
+        # None/"" for the default DentalSegmentator). Passed to the engine as the
+        # STOM_MODEL env var so the user can switch models without env vars.
+        self._model = model
         # Cap inference wall-time so a wedged engine surfaces as an error instead
         # of hanging the caller forever (None = wait indefinitely).
         self._timeout = timeout
         self._run = run
+
+    def set_model(self, model: str | None) -> None:
+        """Choose which bundled model to run on the next segmentation."""
+        self._model = model
 
     def segment(
         self, volume: Volume, *, progress: ProgressCb | None = None
@@ -183,6 +192,8 @@ class SubprocessEngine:
             env = dict(os.environ)
             if self._model_dir:
                 env["STOM_MODEL_DIR"] = self._model_dir
+            if self._model:
+                env["STOM_MODEL"] = self._model
 
             creationflags = _CREATE_NO_WINDOW if os.name == "nt" else 0
 

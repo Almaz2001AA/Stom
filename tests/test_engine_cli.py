@@ -123,6 +123,23 @@ def test_subprocess_engine_passes_model_dir(tmp_path):
     assert seen["model_dir"] == "/weights/here"
 
 
+def test_subprocess_engine_passes_selected_model(tmp_path):
+    seen = {}
+
+    def fake_run(cmd, env=None, timeout=None, on_progress=None, creationflags=0):
+        seen["model"] = (env or {}).get("STOM_MODEL")
+        run_predict(cmd[-2], cmd[-1], InProcessEngine(FakeRunner()))
+        return _Proc(0, "", "")
+
+    engine = SubprocessEngine("stom-engine", run=fake_run)
+    engine.segment(_volume())
+    assert seen["model"] is None  # default: no STOM_MODEL -> DentalSegmentator
+
+    engine.set_model("toothfairy2")
+    engine.segment(_volume())
+    assert seen["model"] == "toothfairy2"
+
+
 # --- real subprocess round-trip (no model needed; FakeRunner via env) -------
 
 def test_real_subprocess_roundtrip(tmp_path, monkeypatch):

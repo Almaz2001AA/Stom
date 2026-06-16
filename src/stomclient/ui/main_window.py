@@ -187,6 +187,14 @@ class MainWindow(QMainWindow):
             S.TIP["local_on"] if self._c.local_available else S.TIP["local_off"]
         )
         self._local_chk.toggled.connect(self._on_local_toggled)
+        # Model picker: DentalSegmentator (fast, teeth as blocks) vs ToothFairy2
+        # (per-tooth FDI, heavier). Carries the selection to the engine as
+        # STOM_MODEL, so no environment variable is needed.
+        self._model_combo = QComboBox()
+        self._model_combo.addItem(S.BTN["model_dental"], None)
+        self._model_combo.addItem(S.BTN["model_tf2"], "toothfairy2")
+        self._model_combo.setToolTip(S.TIP["model_pick"])
+        self._model_combo.currentIndexChanged.connect(self._on_model_changed)
         # First-run install of the engine-pack: shown only until an engine is
         # wired, so the checkbox above can actually be enabled on a slim client.
         self._install_btn = QPushButton(S.BTN["install_engine"])
@@ -233,7 +241,8 @@ class MainWindow(QMainWindow):
         left.addWidget(_section(S.SECTION["study"]))
         left.addWidget(open_btn)
         left.addWidget(_section(S.SECTION["segmentation"]))
-        for w in (self._local_chk, self._segment_btn, self._install_btn, self._update_btn):
+        for w in (self._local_chk, self._model_combo, self._segment_btn,
+                  self._install_btn, self._update_btn):
             left.addWidget(w)
         left.addWidget(_section(S.SECTION["tools"]))
         for w in (self._plane, self._measure_btn, clear_btn):
@@ -419,6 +428,10 @@ class MainWindow(QMainWindow):
         self._segment_btn.setText(
             S.BTN["segment_local"] if checked else S.BTN["segment_cloud"]
         )
+
+    def _on_model_changed(self, _index: int) -> None:
+        # currentData() is None for DentalSegmentator, "toothfairy2" for per-tooth.
+        self._c.set_model(self._model_combo.currentData())
 
     # --- engine install / update --------------------------------------------
 

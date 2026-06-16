@@ -34,6 +34,9 @@ class AppController:
         self._cloud = cloud_client
         self._engine = engine
         self.local = False
+        # Selected local model ("toothfairy2" for per-tooth, None for the default
+        # DentalSegmentator). Applied to the engine before each segmentation.
+        self._model: str | None = None
         self._on_change = on_change
         self.state = State.EMPTY
         self.volume: Volume | None = None
@@ -111,7 +114,19 @@ class AppController:
     def set_engine(self, engine) -> None:
         """Wire in a local engine after first-run install; enables local mode."""
         self._engine = engine
+        self._apply_model()
         self._changed()
+
+    def set_model(self, model: str | None) -> None:
+        """Choose the local model (``"toothfairy2"`` for per-tooth, else default)."""
+        self._model = model or None
+        self._apply_model()
+        self._changed()
+
+    def _apply_model(self) -> None:
+        """Push the selected model onto the engine if it supports switching."""
+        if self._engine is not None and hasattr(self._engine, "set_model"):
+            self._engine.set_model(self._model)
 
     def set_local_mode(self, enabled: bool) -> None:
         """Choose local (on-device) segmentation over the cloud backend."""

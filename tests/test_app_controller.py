@@ -216,6 +216,35 @@ def test_set_engine_enables_local_and_notifies():
     c.set_local_mode(True)                    # no longer raises
 
 
+class _ModelEngine:
+    """Engine stand-in that records the model selection pushed onto it."""
+
+    def __init__(self):
+        self.model = "unset"
+
+    def set_model(self, model):
+        self.model = model
+
+
+def test_set_model_applies_to_engine_and_remembers_for_later_engine():
+    c = AppController(FakeCloud([]))
+    eng = _ModelEngine()
+    c.set_engine(eng)
+    assert eng.model is None                  # default applied on wiring
+
+    c.set_model("toothfairy2")
+    assert eng.model == "toothfairy2"         # pushed to the live engine
+    c.set_model("")                            # empty -> default model
+    assert eng.model is None
+
+    # A selection made before an engine exists is applied when it is wired.
+    c2 = AppController(FakeCloud([]))
+    c2.set_model("toothfairy2")
+    eng2 = _ModelEngine()
+    c2.set_engine(eng2)
+    assert eng2.model == "toothfairy2"
+
+
 def test_set_label_visible_toggles():
     geo = Geometry.identity((0.3, 0.3, 0.3))
     c = AppController(FakeCloud([]))

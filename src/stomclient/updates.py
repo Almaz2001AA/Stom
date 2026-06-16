@@ -24,23 +24,30 @@ INSTALLER_NAME = "StomClientSetup.exe"
 
 
 def current_version() -> str:
-    """This client's version.
+    """This client's version, robust against stale/duplicate bundled metadata.
 
-    Primary source is the installed ``stomcore`` package metadata. In a frozen
-    PyInstaller build that metadata is bundled via ``copy_metadata`` (see
-    ``packaging/stom-client.spec``); should it ever be missing we fall back to the
-    baked-in ``stomcore.__version__`` rather than ``"0"`` — a ``"0"`` here makes
-    every release look newer than us and nags the user to update on every launch.
+    The baked-in ``stomcore.__version__`` literal is the authoritative build
+    version: it is compiled into the frozen app and cannot drift. We read it
+    FIRST and fall back to ``importlib.metadata`` only if it is somehow missing.
+
+    Why not trust the metadata first: an installer that upgrades over a previous
+    install can leave the OLD ``stomcore-<old>.dist-info`` sitting next to the new
+    one (Inno Setup copies files but does not delete removed ones). With two
+    dist-infos for the same package ``importlib.metadata.version`` may return the
+    STALE version, which made the updater report a phantom "new version" on every
+    launch — even immediately after updating. The literal sidesteps that entirely.
     """
     try:
-        return version("stomcore")
-    except PackageNotFoundError:  # pragma: no cover - metadata bundled in practice
-        try:
-            from stomcore import __version__
+        from stomcore import __version__
 
+        if __version__:
             return __version__
-        except Exception:  # noqa: BLE001 - last-ditch; never break startup
-            return "0"
+    except Exception:  # noqa: BLE001 - never break startup
+        pass
+    try:
+        return version("stomcore")
+    except PackageNotFoundError:  # pragma: no cover - literal present in practice
+        return "0"
 
 
 def parse_version(tag: str) -> tuple[int, ...]:

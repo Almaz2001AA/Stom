@@ -85,6 +85,17 @@ def test_check_for_update_quiet_when_own_version_unknown(monkeypatch):
     assert check_for_client_update(opener=_opener_for(_release_json("v0.2.0"))) is None
 
 
+def test_current_version_prefers_baked_literal_over_stale_metadata(monkeypatch):
+    # Simulate an upgrade-over-install that left an OLD stomcore dist-info around,
+    # so importlib.metadata reports a stale version: current_version must ignore
+    # it and read the authoritative baked-in literal instead (no phantom nag).
+    import stomcore
+
+    monkeypatch.setattr(updates, "version", lambda name: "0.1.0")
+    assert updates.current_version() == stomcore.__version__
+    assert updates.current_version() != "0.1.0"
+
+
 def test_check_for_update_swallows_network_errors():
     def _boom(url):
         raise OSError("offline")

@@ -23,6 +23,16 @@ RestartApplications=no
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons:"
 
+[InstallDelete]
+; Wipe the previous payload before copying the new build so stale files from an
+; older version do not accumulate across in-app upgrades. Critically this removes
+; the old stomcore-<old>.dist-info: leaving it beside the new one made
+; importlib.metadata report the wrong version, so the updater nagged "new version
+; available" on every launch. {app}\_internal holds all bundled libs + metadata
+; (PyInstaller onedir); it is pure program data (no user files) so it is safe to
+; clear and is recreated by [Files] below.
+Type: filesandordirs; Name: "{app}\_internal"
+
 [Files]
 Source: "dist\stom-client\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 

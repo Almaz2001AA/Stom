@@ -1,13 +1,19 @@
 name: build-engine-pack
 
 # Builds the on-device engine-pack (self-contained `stom-engine` CLI bundling
-# torch CPU + nnU-Net + DentalSegmentator weights) on a Windows runner. On a
-# version tag (v*) it publishes the zip + manifest to the GitHub Release; the
-# slim desktop client downloads them on first local segmentation.
+# torch CPU + nnU-Net + the segmentation weights) on a Windows runner and
+# publishes the zip + manifest to a DEDICATED, fixed `engine` prerelease.
+#
+# Decoupled from client releases ON PURPOSE: this runs only on manual dispatch,
+# NOT on v* tags. Client (v*) releases rebuild only the installer, so a
+# client-only update never republishes the ~1.3 GB engine-pack and users do not
+# re-download it. Run this workflow only when the engine itself changes (engine
+# code, nnU-Net, or the weights), passing the new engine `version`. The `engine`
+# release is marked prerelease so it never becomes GitHub's "latest" and shadows
+# the client installer release that the client auto-updater looks for.
 #
 # REQUIRES repository variable WEIGHTS_URL: a direct download for the
-# DentalSegmentator weights archive (the Dataset112_* folder). The weights are
-# ~236 MB and are NOT committed to the repo.
+# DentalSegmentator weights archive (the Dataset112_* folder). ~236 MB, not in git.
 #
 # OPTIONAL repository variable TF2_WEIGHTS_URL: a direct download for the 49-class
 # ToothFairy2 per-tooth model archive (a top-level Dataset112_ToothFairy2/ folder,
@@ -16,10 +22,12 @@ name: build-engine-pack
 # When unset, a DentalSegmentator-only pack is built (no size increase).
 
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Engine version label for the manifest (e.g. v0.4.1)"
+        required: true
+        default: "engine"
 
 permissions:
   contents: write
@@ -86,11 +94,13 @@ jobs:
       - name: Zip engine-pack + write manifest
         shell: pwsh
         run: |
-          $version = if ($env:GITHUB_REF -like "refs/tags/*") { $env:GITHUB_REF_NAME } else { "dev" }
+          $version = "${{ github.event.inputs.version }}"
           $zip = "stom-engine-pack-win64.zip"
           Compress-Archive -Path packaging/dist/stom-engine/* -DestinationPath $zip -Force
           $sha = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
-          $url = "https://github.com/${env:GITHUB_REPOSITORY}/releases/latest/download/$zip"
+          # The zip is hosted on the fixed `engine` release, so the URL is stable
+          # across client releases (the whole point of decoupling).
+          $url = "https://github.com/${env:GITHUB_REPOSITORY}/releases/download/engine/$zip"
           # Record which models are bundled so the manifest is self-describing.
           # Detect ToothFairy2 from the source models/ tree the spec bundles from
           # (robust: PyInstaller's onedir layout nests datas under _internal/).
@@ -109,10 +119,13 @@ jobs:
             stom-engine-pack-win64.zip
             engine-pack-manifest.json
 
-      - name: Publish to Release (on tag)
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Publish to the fixed `engine` prerelease
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: engine
+          name: "Engine pack (on-device segmentation models)"
+          prerelease: true
+          make_latest: false
           files: |
             stom-engine-pack-win64.zip
             engine-pack-manifest.json

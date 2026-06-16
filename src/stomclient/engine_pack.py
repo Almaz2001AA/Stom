@@ -28,10 +28,14 @@ EXE_NAME = "stom-engine.exe" if os.name == "nt" else "stom-engine"
 # one and offer an update. Written by provision() after a successful extract.
 MARKER_NAME = "installed.json"
 
-# Stable URL: GitHub serves the latest release's asset by name. CI publishes
-# both the manifest and the versioned engine-pack zip it points at.
+# The engine-pack lives on its OWN fixed `engine` release (a prerelease, so it
+# never becomes GitHub's "latest" and shadows the client installer release). This
+# decouples engine cadence from client (v*) releases: a client-only update no
+# longer rebuilds/republishes the ~1.3 GB engine-pack, so users stop re-downloading
+# it on every release. The `engine` tag and its manifest are updated in place only
+# when the engine actually changes (build-engine-pack runs on workflow_dispatch).
 MANIFEST_URL = (
-    "https://github.com/Almaz2001AA/Stom/releases/latest/download/"
+    "https://github.com/Almaz2001AA/Stom/releases/download/engine/"
     "engine-pack-manifest.json"
 )
 

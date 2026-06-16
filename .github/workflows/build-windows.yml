@@ -4,6 +4,10 @@ name: build-windows-installer
 # version tag (v*) is pushed, publishes StomClientSetup.exe to a GitHub Release.
 # Trigger manually from the Actions tab (workflow_dispatch) to just get the
 # artifact without a release.
+#
+# Installer ONLY — the ~1.3 GB engine-pack is built separately (build-engine-pack,
+# manual dispatch -> the fixed `engine` prerelease) so a client release never
+# forces users to re-download the engine. See build-engine-pack.yml.
 
 on:
   push:
